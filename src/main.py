@@ -116,6 +116,9 @@ def main(
     handled = ledger.handled_post_ids()
     skipped = [p for p in eligible_posts if p.post.post_id in handled]
     eligible_posts = [p for p in eligible_posts if p.post.post_id not in handled]
+    # Freshness matters: in public Community Notes data, notes written within ~1h of the first note
+    # on a post reach CRH ~5x as often as notes written a day later. Newest posts first.
+    eligible_posts.sort(key=lambda p: p.post.created_at, reverse=True)
     if skipped:
         print(f"  Skipping {len(skipped)} posts already handled (see data/ledger.jsonl)")
     print(

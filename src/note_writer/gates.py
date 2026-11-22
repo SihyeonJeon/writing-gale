@@ -13,6 +13,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
+from urllib.parse import urlparse
 
 import requests
 
@@ -27,6 +28,29 @@ OPINION_RE = re.compile(
 PREFIX_RE = re.compile(r"^\s*(community note|note|context)\s*:", re.IGNORECASE)
 
 MAX_CHARS = 280
+
+# Domains whose citations do badly in public Community Notes data (low CRH, high CRNH) or that
+# aren't real sources: AI chatbots, search-result links, shorteners, dictionaries.
+BANNED_DOMAINS = {
+    "grok.com", "chatgpt.com", "grokipedia.com", "gemini.google.com", "perplexity.ai",
+    "share.google", "t.co", "tinyurl.com", "bit.ly",
+    "communitynotes.x.com", "merriam-webster.com", "dictionary.com", "dictionary.cambridge.org",
+}
+
+
+def _host(url: str) -> str:
+    try:
+        h = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return ""
+    return h.removeprefix("www.").removeprefix("m.")
+
+
+def banned_url(url: str) -> bool:
+    h = _host(url)
+    if h == "google.com" and "/search" in url:
+        return True
+    return any(h == d or h.endswith("." + d) for d in BANNED_DOMAINS)
 UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/130.0 Safari/537.36"
@@ -97,6 +121,10 @@ def check_note(text: str, check_urls: bool = True) -> GateResult:
     m = OPINION_RE.search(URL_RE.sub("", text))
     if m:
         problems.append(f'note contains opinion/hedging wording: "{m.group(0)}"')
+
+    for u in urls:
+        if banned_url(u):
+            problems.append(f"cites a source raters distrust or that is not a real source (AI chatbot, search link, shortener, dictionary): {u}")
 
     dead: List[str] = []
     if check_urls and urls:

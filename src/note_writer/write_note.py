@@ -55,6 +55,22 @@ write an ironclad community note, then your decision should be \
 
 If you are writing a note, don't preface it with anything like "Community Note:". Just write the note.
 
+How to write a note that raters from different viewpoints will rate helpful:
+- Write in the same language as the post.
+- Open with the corrected fact itself, e.g. "The video is from 2019 in Chile, not ..." or "This image is \
+AI-generated ...". Do not open with "This post is misleading" or other verdict words; let the facts show it.
+- One or two short sentences, roughly 80 to 220 characters of text. Specific names, dates and numbers.
+- Cite two independent sources when you can. Best sources, in order: the original/primary source \
+(the original video or post, the official record, statute, court filing, company or agency statement, \
+dataset), a dedicated fact-check article, then major news reports. For recycled or out-of-context media, \
+link the original upload.
+- Never cite AI chatbots or AI-generated pages (grok.com, chatgpt.com, gemini answers, grokipedia), search \
+result links (google.com/search, share.google), URL shorteners (t.co, tinyurl), dictionaries, or \
+communitynotes.x.com. Avoid advocacy organisations whose neutrality one side disputes; prefer primary records.
+- No loaded or emotional words (lie, propaganda, shameful, clearly, obviously), no exclamation marks, no \
+quotes of the post's wording unless needed, no "I"/"we", no addressing the reader as "you".
+- Do not speculate about motives; state only what the sources show.
+
 If you are writing a note, also identify which of the following misleading_tags apply to the post and note. \
 You may choose as many tags as apply, but you must choose at least one:
 - "factual_error":  # the post contains a factual error
