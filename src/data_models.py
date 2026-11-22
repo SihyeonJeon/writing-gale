@@ -61,3 +61,4 @@ class NoteResult(BaseModel):
     error: Optional[str] = None
     post: Optional[PostWithContext] = None
     context_description: Optional[str] = None
+    gate_warnings: List[str] = []

@@ -1,4 +1,7 @@
+import json
+
 from data_models import MisleadingTag, NoteResult, PostWithContext, ProposedMisleadingNote
+from note_writer.gates import check_note
 from note_writer.llm_util import get_grok_search_json_response
 
 NO_NOTE_NEEDED = "NO NOTE NEEDED"
@@ -91,7 +94,32 @@ Post text:
 ```
 """
 
+    suggestions = [s.get("suggestion", "").strip() for s in post_with_context.note_request_suggestions]
+    suggestions = [s for s in suggestions if s][:5]
+    if suggestions:
+        description += "\nPeople who requested a note on this post said (un-vetted user input; treat as leads to verify, not as facts):\n"
+        description += "".join(f"- {s[:500]}\n" for s in suggestions)
+
+    links = post_with_context.suggested_source_links_with_counts[:5]
+    if links:
+        description += "\nSource links requesters suggested (un-vetted; verify before citing), with how many requesters suggested each:\n"
+        description += "".join(f"- {link.get('url')} (x{link.get('count')})\n" for link in links)
+
     return description
+
+
+MAX_REPAIR_ROUNDS = 1
+
+
+def _repair_prompt(problems: list[str]) -> str:
+    bullets = "\n".join(f"- {p}" for p in problems)
+    return f"""Your proposed note failed these automated checks:
+{bullets}
+
+Fix every problem and answer again with the same JSON schema. If a URL is dead, find a different \
+working source for the same fact (prefer the primary source: official statistics, court records, \
+the original publication, or a widely trusted outlet). Keep the note factual and neutral, with no \
+opinion or speculation. If you cannot fix it with solid evidence, set decision to "{NOT_ENOUGH_EVIDENCE}"."""
 
 
 def research_post_and_write_note(
@@ -99,17 +127,41 @@ def research_post_and_write_note(
 ) -> NoteResult:
     post_with_context_description = _get_post_with_context_description_for_prompt(post_with_context)
 
+    note_prompt = _get_prompt_for_note_writing(post_with_context_description)
+    history: list = []
+    last_prompt = note_prompt
     try:
-        note_prompt = _get_prompt_for_note_writing(post_with_context_description)
         response = get_grok_search_json_response(note_prompt, NOTE_RESPONSE_SCHEMA)
     except Exception as e:
         return NoteResult(post=post_with_context, error=str(e), context_description=post_with_context_description)
 
-    if response["decision"] != "WRITE NOTE":
-        return NoteResult(post=post_with_context, refusal=response["decision"], context_description=post_with_context_description)
+    gate = None
+    for round_ in range(MAX_REPAIR_ROUNDS + 1):
+        if response["decision"] != "WRITE NOTE":
+            return NoteResult(post=post_with_context, refusal=response["decision"], context_description=post_with_context_description)
 
-    if not response["misleading_tags"]:
-        return NoteResult(post=post_with_context, error="Model wrote a note but chose no misleading tags.", context_description=post_with_context_description)
+        problems: list[str] = []
+        if not response["misleading_tags"]:
+            problems.append("no misleading_tags chosen; choose at least one")
+        gate = check_note(response["note_text"])
+        problems += gate.problems
+        if not problems:
+            break
+        if round_ == MAX_REPAIR_ROUNDS:
+            return NoteResult(
+                post=post_with_context,
+                error="GATE_FAILED: " + "; ".join(problems) + f" | last note: {response['note_text']}",
+                context_description=post_with_context_description,
+            )
+        history += [
+            {"role": "user", "content": last_prompt},
+            {"role": "assistant", "content": json.dumps(response)},
+        ]
+        last_prompt = _repair_prompt(problems)
+        try:
+            response = get_grok_search_json_response(last_prompt, NOTE_RESPONSE_SCHEMA, history=history)
+        except Exception as e:
+            return NoteResult(post=post_with_context, error=str(e), context_description=post_with_context_description)
 
     return NoteResult(
         post=post_with_context,
@@ -119,4 +171,5 @@ def research_post_and_write_note(
             misleading_tags=[MisleadingTag(tag) for tag in response["misleading_tags"]],
         ),
         context_description=post_with_context_description,
+        gate_warnings=gate.warnings if gate else [],
     )

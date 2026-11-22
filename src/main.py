@@ -10,6 +10,7 @@ from cnapi.get_api_eligible_posts import get_posts_eligible_for_notes
 from cnapi.submit_note import submit_note
 from data_models import NoteResult, Post, PostWithContext
 import dotenv
+import ledger
 from note_writer.write_note import research_post_and_write_note
 
 
@@ -54,6 +55,17 @@ def _worker(
             f"\n*MISLEADING TAGS:*\n  {[tag.value for tag in note_result.note.misleading_tags]}\n"
         )
 
+    post_id = post_with_context.post.post_id
+    note_text = note_result.note.note_text if note_result.note else None
+    tags = [t.value for t in note_result.note.misleading_tags] if note_result.note else None
+    if note_result.refusal:
+        ledger.record(post_id, note_result.refusal, test_mode=test_mode)
+    elif note_result.error:
+        decision = "gate_failed" if note_result.error.startswith("GATE_FAILED") else "error"
+        ledger.record(post_id, decision, error=note_result.error[:2000], test_mode=test_mode)
+    elif note_result.note is not None and dry_run:
+        ledger.record(post_id, "dry_run", note_text=note_text, misleading_tags=tags, gate_warnings=note_result.gate_warnings, test_mode=test_mode)
+
     if note_result.note is not None and not dry_run:
         try:
             response = submit_note(
@@ -61,13 +73,18 @@ def _worker(
                 test_mode=test_mode,
                 verbose_if_failed=False,
             )
-            note_id = response["data"]["id"]
+            data = response.get("data", {})
+            note_id = data.get("id") or data.get("note_id")
             log_strings.append(f"\n*SUCCESSFULLY SUBMITTED NOTE*\nNote ID: {note_id}\n")
+            ledger.record(post_id, "submitted", note_id=note_id, note_text=note_text, misleading_tags=tags, gate_warnings=note_result.gate_warnings, test_mode=test_mode)
         except Exception as e:
+            details = _xurl_error_details(e)
             log_strings.append(
                 "\n*ERROR SUBMITTING NOTE* (if it says a note already exists, we already wrote a note "
-                f"on this post; moving on):\n{_xurl_error_details(e)}\n"
+                f"on this post; moving on):\n{details}\n"
             )
+            decision = "duplicate" if "already created a note" in details else "submit_error"
+            ledger.record(post_id, decision, error=details[:2000], note_text=note_text, misleading_tags=tags, test_mode=test_mode)
     print("".join(log_strings) + "\n")
 
 
@@ -96,6 +113,11 @@ def main(
             "permissions (README step 2.1)."
         )
     print(f"Found {len(eligible_posts)} recent posts eligible for notes")
+    handled = ledger.handled_post_ids()
+    skipped = [p for p in eligible_posts if p.post.post_id in handled]
+    eligible_posts = [p for p in eligible_posts if p.post.post_id not in handled]
+    if skipped:
+        print(f"  Skipping {len(skipped)} posts already handled (see data/ledger.jsonl)")
     print(
         f"  Eligible Post IDs: {', '.join([str(post_with_context.post.post_id) for post_with_context in eligible_posts])}\n"
     )
