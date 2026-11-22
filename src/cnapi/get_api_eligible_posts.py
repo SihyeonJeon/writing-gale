@@ -22,7 +22,7 @@ def _fetch_posts_eligible_for_notes(
         "/2/notes/search/posts_eligible_for_notes"
         f"?test_mode={'true' if test_mode else 'false'}"
         f"&max_results={max_results}"
-        "&tweet.fields=author_id,created_at,referenced_tweets,media_metadata,note_tweet,note_request_suggestions,suggested_source_links_with_counts"
+        "&tweet.fields=author_id,created_at,referenced_tweets,media_metadata,note_tweet,note_request_suggestions,suggested_source_links_with_counts,public_metrics,possibly_sensitive"
         "&expansions=attachments.media_keys,referenced_tweets.id,referenced_tweets.id.attachments.media_keys"
         "&media.fields=alt_text,duration_ms,height,media_key,preview_image_url,public_metrics,type,url,width,variants"
     )
@@ -54,6 +54,8 @@ def _parse_individual_post(item: Dict, media_by_key: Dict[str, Dict]) -> Post:
         ),
         text=text,
         media=media_objs,
+        public_metrics=item.get("public_metrics") or {},
+        possibly_sensitive=bool(item.get("possibly_sensitive", False)),
     )
     return post
 

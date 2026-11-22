@@ -42,6 +42,8 @@ class Post(BaseModel):
     created_at: datetime
     text: str
     media: List[Media]
+    public_metrics: Dict[str, int] = {}
+    possibly_sensitive: bool = False
 
 
 class PostWithContext(BaseModel):

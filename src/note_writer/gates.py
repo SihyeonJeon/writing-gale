@@ -118,7 +118,12 @@ def check_note(text: str, check_urls: bool = True) -> GateResult:
         problems.append("note contains an emoji")
     if PREFIX_RE.search(text):
         problems.append('note starts with a label like "Community Note:"')
-    m = OPINION_RE.search(URL_RE.sub("", text))
+    body = URL_RE.sub("", text)
+    if re.search("[\u2014\u2013]", body):
+        problems.append("note uses an em/en dash; use a period or comma (dashes read as machine-written and score slightly lower)")
+    if re.search(r"\?\s*(?:yes|no)\b", body, re.IGNORECASE):
+        problems.append("note asks a question and answers it; state the fact directly")
+    m = OPINION_RE.search(body)
     if m:
         problems.append(f'note contains opinion/hedging wording: "{m.group(0)}"')
 

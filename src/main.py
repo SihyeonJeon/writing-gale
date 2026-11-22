@@ -11,6 +11,7 @@ from cnapi.submit_note import submit_note
 from data_models import NoteResult, Post, PostWithContext
 import dotenv
 import ledger
+from selection import rank_posts
 from note_writer.write_note import research_post_and_write_note
 
 
@@ -90,6 +91,7 @@ def _worker(
 
 def main(
     num_posts: int = 10,
+    fetch: int = 50,
     dry_run: bool = False,
     concurrency: int = 1,
     test_mode: bool = True,
@@ -102,7 +104,7 @@ def main(
     print(f"Getting up to {num_posts} recent posts eligible for notes (test_mode={test_mode})")
     try:
         eligible_posts: List[PostWithContext] = get_posts_eligible_for_notes(
-            max_results=num_posts, test_mode=test_mode
+            max_results=max(fetch, num_posts), test_mode=test_mode
         )
     except subprocess.CalledProcessError as e:
         sys.exit(
@@ -116,9 +118,11 @@ def main(
     handled = ledger.handled_post_ids()
     skipped = [p for p in eligible_posts if p.post.post_id in handled]
     eligible_posts = [p for p in eligible_posts if p.post.post_id not in handled]
-    # Freshness matters: in public Community Notes data, notes written within ~1h of the first note
-    # on a post reach CRH ~5x as often as notes written a day later. Newest posts first.
-    eligible_posts.sort(key=lambda p: p.post.created_at, reverse=True)
+    # Rank by freshness, spread, demand and media (see selection.py) and keep the top num_posts.
+    ranked = rank_posts(eligible_posts)
+    for p, sc, parts in ranked:
+        print(f"  {p.post.post_id} score={sc:.2f} {parts}")
+    eligible_posts = [p for p, _, _ in ranked[:num_posts]]
     if skipped:
         print(f"  Skipping {len(skipped)} posts already handled (see data/ledger.jsonl)")
     print(
@@ -148,6 +152,9 @@ if __name__ == "__main__":
         "--num-posts", type=int, default=10, help="Number of posts to process"
     )
     parser.add_argument(
+        "--fetch", type=int, default=50, help="How many eligible posts to fetch and rank (max 100)"
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Do not submit notes to the API, just print them to the console",
@@ -162,6 +169,7 @@ if __name__ == "__main__":
     _check_setup()
     main(
         num_posts=args.num_posts,
+        fetch=min(args.fetch, 100),
         dry_run=args.dry_run,
         concurrency=args.concurrency,
         test_mode=os.getenv("TEST_MODE", "true").strip().lower() != "false",

@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import time
@@ -44,11 +45,37 @@ def _make_request(payload: dict, max_attempts: int = 3) -> str:
     )
 
 
+IMAGE_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+
+
+def _inline_image(url: str) -> str | None:
+    """Download an image and return a base64 data URL; None if it can't be fetched.
+    Inlining avoids the model provider's own fetcher being rate-limited or blocked by the host."""
+    try:
+        r = requests.get(url, timeout=20, headers={"User-Agent": IMAGE_UA})
+    except requests.RequestException:
+        return None
+    ctype = r.headers.get("Content-Type", "").split(";")[0]
+    if r.status_code != 200 or not ctype.startswith("image/") or len(r.content) > 10_000_000:
+        return None
+    return f"data:{ctype};base64,{base64.b64encode(r.content).decode()}"
+
+
+def _content(prompt: str, image_urls: list[str] | None):
+    images = [d for d in (_inline_image(u) for u in (image_urls or [])[:4]) if d]
+    if not images:
+        return prompt
+    return [{"type": "input_text", "text": prompt}] + [
+        {"type": "input_image", "image_url": d, "detail": "high"} for d in images
+    ]
+
+
 def get_grok_search_json_response(
     prompt: str,
     schema: dict,
     model: str = "grok-4.3",
     history: list | None = None,
+    image_urls: list[str] | None = None,
 ) -> dict:
     """
     One call that lets Grok search the web and X, and answer with JSON
@@ -56,7 +83,7 @@ def get_grok_search_json_response(
     """
     payload = {
         "model": model,
-        "input": [*(history or []), {"role": "user", "content": prompt}],
+        "input": [*(history or []), {"role": "user", "content": _content(prompt, image_urls)}],
         "tools": [
             {"type": "web_search", "enable_image_understanding": True},
             {

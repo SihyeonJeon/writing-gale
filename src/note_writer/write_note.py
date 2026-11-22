@@ -124,7 +124,7 @@ Post text:
     return description
 
 
-MAX_REPAIR_ROUNDS = 1
+MAX_REPAIR_ROUNDS = 2
 
 
 def _repair_prompt(problems: list[str]) -> str:
@@ -138,6 +138,16 @@ the original publication, or a widely trusted outlet). Keep the note factual and
 opinion or speculation. If you cannot fix it with solid evidence, set decision to "{NOT_ENOUGH_EVIDENCE}"."""
 
 
+def _image_urls(pwc: PostWithContext) -> list[str]:
+    urls = []
+    for post in [pwc.post, pwc.quoted_post, pwc.in_reply_to_post]:
+        for m in (post.media if post else []):
+            u = m.url if m.media_type == "photo" else m.preview_image_url
+            if u:
+                urls.append(u)
+    return urls[:4]
+
+
 def research_post_and_write_note(
     post_with_context: PostWithContext,
 ) -> NoteResult:
@@ -147,7 +157,7 @@ def research_post_and_write_note(
     history: list = []
     last_prompt = note_prompt
     try:
-        response = get_grok_search_json_response(note_prompt, NOTE_RESPONSE_SCHEMA)
+        response = get_grok_search_json_response(note_prompt, NOTE_RESPONSE_SCHEMA, image_urls=_image_urls(post_with_context))
     except Exception as e:
         return NoteResult(post=post_with_context, error=str(e), context_description=post_with_context_description)
 
