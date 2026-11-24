@@ -8,6 +8,9 @@ import requests
 
 RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
 
+# Per-process count of billed API calls (HTTP attempts, including retries), printed by main.
+CALLS = {"n": 0}
+
 
 def _make_request(payload: dict, max_attempts: int = 3) -> str:
     """
@@ -20,6 +23,7 @@ def _make_request(payload: dict, max_attempts: int = 3) -> str:
         "Authorization": f"Bearer {os.getenv('XAI_API_KEY')}",
     }
     for attempt in range(1, max_attempts + 1):
+        CALLS["n"] += 1
         try:
             response = requests.post(responses_url, headers=headers, json=payload, timeout=300)
         except requests.RequestException as e:

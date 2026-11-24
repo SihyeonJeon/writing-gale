@@ -2,7 +2,7 @@ import json
 
 from data_models import MisleadingTag, NoteResult, PostWithContext, ProposedMisleadingNote
 from note_writer.critic import critique
-from note_writer.gates import check_note
+from note_writer.gates import check_note, normalize_note
 from note_writer.llm_util import get_grok_search_json_response
 
 NO_NOTE_NEEDED = "NO NOTE NEEDED"
@@ -128,7 +128,8 @@ Post text:
     return description
 
 
-MAX_REPAIR_ROUNDS = 2
+# Each repair round is one more search-enabled LLM call; dashes/prefixes are fixed locally instead.
+MAX_REPAIR_ROUNDS = 1
 
 
 def _repair_prompt(problems: list[str]) -> str:
@@ -170,6 +171,7 @@ def research_post_and_write_note(
         if response["decision"] != "WRITE NOTE":
             return NoteResult(post=post_with_context, refusal=response["decision"], context_description=post_with_context_description)
 
+        response["note_text"] = normalize_note(response["note_text"])
         problems: list[str] = []
         if not response["misleading_tags"]:
             problems.append("no misleading_tags chosen; choose at least one")

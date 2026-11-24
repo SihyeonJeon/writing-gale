@@ -100,6 +100,21 @@ def url_status(url: str, timeout: float = 10.0) -> Optional[int]:
 BLOCKED_STATUSES = {401, 403, 429, 999}
 
 
+def normalize_note(text: str) -> str:
+    """Fix style problems that don't need another LLM call: dashes and label prefixes.
+    URLs are left untouched."""
+    parts = re.split(f"({URL_RE.pattern})", text)
+    out = []
+    for i, part in enumerate(parts):
+        if i % 2 == 1:  # URL
+            out.append(part)
+            continue
+        part = re.sub(r"(\d)\s*[–—]\s*(\d)", r"\1-\2", part)  # number ranges
+        part = re.sub(r"\s*[—–]\s*", ", ", part)
+        out.append(part)
+    return PREFIX_RE.sub("", "".join(out)).strip()
+
+
 @dataclass
 class GateResult:
     ok: bool

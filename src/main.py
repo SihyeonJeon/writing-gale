@@ -144,7 +144,9 @@ def main(
     else:
         for post in eligible_posts:
             _worker(post, dry_run, test_mode)
-    print("Done.")
+    from note_writer.llm_util import CALLS
+
+    print(f"Done. Grok API calls this run: {CALLS['n']}")
 
 
 if __name__ == "__main__":
