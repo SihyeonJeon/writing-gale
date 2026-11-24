@@ -59,7 +59,9 @@ def _worker(
     post_id = post_with_context.post.post_id
     note_text = note_result.note.note_text if note_result.note else None
     tags = [t.value for t in note_result.note.misleading_tags] if note_result.note else None
-    if note_result.refusal:
+    if note_result.refusal and note_result.refusal.startswith("CRITIC_SKIP"):
+        ledger.record(post_id, "critic_skip", detail=note_result.refusal[:2000], test_mode=test_mode)
+    elif note_result.refusal:
         ledger.record(post_id, note_result.refusal, test_mode=test_mode)
     elif note_result.error:
         decision = "gate_failed" if note_result.error.startswith("GATE_FAILED") else "error"

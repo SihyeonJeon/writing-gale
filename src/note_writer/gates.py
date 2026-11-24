@@ -83,6 +83,13 @@ def url_status(url: str, timeout: float = 10.0) -> Optional[int]:
             r.close()
     except requests.RequestException:
         status = None
+    if status is None:  # one retry for transient network errors / slow hosts
+        try:
+            r = requests.get(url, allow_redirects=True, timeout=20, headers=headers, stream=True)
+            status = r.status_code
+            r.close()
+        except requests.RequestException:
+            status = None
     _url_cache[url] = status
     return status
 

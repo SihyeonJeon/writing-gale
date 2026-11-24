@@ -17,6 +17,7 @@ The weights are a starting guess and should be re-fit against our own CRH outcom
 """
 
 import math
+import re
 from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
@@ -24,6 +25,23 @@ from data_models import PostWithContext
 
 FRESH_HALF_LIFE_H = 6.0
 MEDIA_BOOST = 1.5
+
+# Topic multipliers from public-data CRH rates of notes mentioning each topic (base ~11.4%):
+# AI-generated 20.3%, satire/parody 15.7%; Israel/Gaza 6.8%, elections 7.1%, immigration 8.0%.
+TOPIC_WEIGHTS = [
+    (re.compile(r"\bAI\b|\bdeepfake|\bgenerated\b|\bsatir|\bparody", re.I), 1.4),
+    (re.compile(r"\bIsrael|\bGaza|\bPalestin|\bHamas\b|\bZionis|\bIDF\b", re.I), 0.6),
+    (re.compile(r"\belection|\bballot|\bvoter fraud|\brigged\b", re.I), 0.6),
+    (re.compile(r"\bimmigra|\bmigrant|\bdeport|\billegals?\b", re.I), 0.7),
+]
+
+
+def topic_weight(text: str) -> float:
+    w = 1.0
+    for rx, mult in TOPIC_WEIGHTS:
+        if rx.search(text):
+            w *= mult
+    return w
 
 
 def _age_hours(pwc: PostWithContext, now: datetime) -> float:
@@ -51,8 +69,9 @@ def score_post(pwc: PostWithContext, now: datetime | None = None) -> Tuple[float
         "spread": math.log10(1 + velocity),
         "demand": math.log2(1 + requests),
         "media": MEDIA_BOOST if has_media else 1.0,
+        "topic": topic_weight(" ".join(t for t in [pwc.post.text, pwc.quoted_post.text if pwc.quoted_post else ""] if t)),
     }
-    score = parts["media"] * parts["fresh"] * (1 + parts["spread"] + 0.5 * parts["demand"])
+    score = parts["topic"] * parts["media"] * parts["fresh"] * (1 + parts["spread"] + 0.5 * parts["demand"])
     parts["age_h"] = round(age, 2)
     parts["velocity"] = round(velocity, 1)
     return score, parts

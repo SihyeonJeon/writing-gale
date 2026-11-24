@@ -1,6 +1,7 @@
 import json
 
 from data_models import MisleadingTag, NoteResult, PostWithContext, ProposedMisleadingNote
+from note_writer.critic import critique
 from note_writer.gates import check_note
 from note_writer.llm_util import get_grok_search_json_response
 
@@ -70,6 +71,9 @@ communitynotes.x.com. Avoid advocacy organisations whose neutrality one side dis
 - No loaded or emotional words (lie, propaganda, shameful, clearly, obviously), no exclamation marks, no \
 quotes of the post's wording unless needed, no "I"/"we", no addressing the reader as "you".
 - Do not speculate about motives; state only what the sources show.
+- Prefer a positive correction (what the media really shows, where and when it is really from, what the document really says) over an absence claim. A note whose only content is "there is no evidence / no credible reports" rarely gets rated helpful: write one only if an authoritative source explicitly denies the claim, otherwise decide "{NOT_ENOUGH_EVIDENCE}".
+- For politically contested topics (elections, Israel/Palestine, Russia/Ukraine, immigration, partisan figures), raters split along political lines. Write a note only when a primary source (official result, document, original footage) directly contradicts a specific factual claim in the post; never correct framing, word choice or opinion.
+- An attached video arrives as a single preview frame. Do not describe what a video shows unless you verified it through search of the post or the original upload.
 
 If you are writing a note, also identify which of the following misleading_tags apply to the post and note. \
 You may choose as many tags as apply, but you must choose at least one:
@@ -188,6 +192,17 @@ def research_post_and_write_note(
             response = get_grok_search_json_response(last_prompt, NOTE_RESPONSE_SCHEMA, history=history)
         except Exception as e:
             return NoteResult(post=post_with_context, error=str(e), context_description=post_with_context_description)
+
+    try:
+        verdict = critique(post_with_context, post_with_context_description, response["note_text"])
+    except Exception as e:
+        return NoteResult(post=post_with_context, error=f"critic failed: {e}", context_description=post_with_context_description)
+    if not verdict["submit"]:
+        return NoteResult(
+            post=post_with_context,
+            refusal=f"CRITIC_SKIP score={verdict['helpful_across_perspectives']} issues={verdict['issues']} :: {verdict['reason']} | note: {response['note_text']}",
+            context_description=post_with_context_description,
+        )
 
     return NoteResult(
         post=post_with_context,

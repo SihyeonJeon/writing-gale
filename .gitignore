@@ -12,3 +12,5 @@ __pycache__/
 
 # Local run data
 data/
+eval/*.jsonl
+eval/posts.json

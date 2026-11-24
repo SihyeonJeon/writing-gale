@@ -76,6 +76,7 @@ def get_grok_search_json_response(
     model: str = "grok-4.3",
     history: list | None = None,
     image_urls: list[str] | None = None,
+    search: bool = True,
 ) -> dict:
     """
     One call that lets Grok search the web and X, and answer with JSON
@@ -91,7 +92,9 @@ def get_grok_search_json_response(
                 "enable_image_understanding": True,
                 "enable_video_understanding": True,
             },
-        ],
+        ]
+        if search
+        else [],
         "text": {
             "format": {"type": "json_schema", "name": "note", "schema": schema, "strict": True}
         },
