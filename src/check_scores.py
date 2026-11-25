@@ -67,6 +67,34 @@ def print_report(notes: List[Dict]) -> None:
         print(f"  {pending} notes have no evaluator results yet")
 
 
+# Admission criteria over the 50 most recent test notes (README, "Earning admission").
+ADMISSION = [
+    ("ClaimOpinion", "high", ">=", 0.30),
+    ("ClaimOpinion", "low", "<=", 0.30),
+    ("UrlValidity", "high", ">=", 0.95),
+    ("HarassmentAbuse", "high", ">=", 0.98),
+]
+
+
+def admission_report(notes: List[Dict], window: int = 50) -> List[str]:
+    """One line per criterion for the newest `window` scored notes. Ids grow over time."""
+    scored = sorted((n for n in notes if _evaluation_outcomes(n)), key=lambda n: int(n.get("id") or 0), reverse=True)[:window]
+    lines = [f"Admission check over the newest {len(scored)} scored notes (needs {window}):"]
+    if not scored:
+        return lines + ["  no scored notes yet"]
+    all_ok = len(scored) >= window
+    for evaluator, bucket, op, target in ADMISSION:
+        got = sum(
+            1 for n in scored
+            if any(o["evaluator_type"] == evaluator and o["evaluator_score_bucket"] == bucket for o in _evaluation_outcomes(n))
+        ) / len(scored)
+        ok = got >= target if op == ">=" else got <= target
+        all_ok &= ok
+        lines.append(f"  {'OK  ' if ok else 'FAIL'} {evaluator} {bucket}: {got:.0%} (needs {op} {target:.0%})")
+    lines.append("  => meets all criteria" if all_ok else "  => not there yet")
+    return lines
+
+
 if __name__ == "__main__":
     dotenv.load_dotenv()
     parser = argparse.ArgumentParser(description="Show evaluator scores for test-mode notes.")
@@ -87,3 +115,5 @@ if __name__ == "__main__":
         print(json.dumps(notes, indent=2))
     else:
         print_report(notes)
+        print()
+        print("\n".join(admission_report(notes)))

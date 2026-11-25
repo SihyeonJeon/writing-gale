@@ -47,7 +47,12 @@ BLOCKING_ISSUES = {
 }
 
 
-def _prompt(post_description: str, note_text: str) -> str:
+def _prompt(post_description: str, note_text: str, assumptions: list[str] | None = None) -> str:
+    extra = ""
+    if assumptions:
+        extra = "\nThe writer listed these points the note relies on that no source states directly:\n" + "".join(
+            f"- {a}\n" for a in assumptions
+        ) + "If the note depends on any of them, flag opinion_or_speculation.\n"
     return f"""You review a proposed Community Note before it is submitted on X. Community Notes only show a note \
 when raters who usually disagree with each other both rate it helpful.
 
@@ -73,11 +78,11 @@ Post:
 
 Proposed note:
 {note_text}
-"""
+{extra}"""
 
 
-def critique(post_with_context: PostWithContext, post_description: str, note_text: str) -> dict:
-    verdict = get_grok_search_json_response(_prompt(post_description, note_text), CRITIC_SCHEMA)
+def critique(post_with_context: PostWithContext, post_description: str, note_text: str, assumptions: list[str] | None = None) -> dict:
+    verdict = get_grok_search_json_response(_prompt(post_description, note_text, assumptions), CRITIC_SCHEMA)
     blocking = sorted(set(verdict["issues"]) & BLOCKING_ISSUES)
     verdict["submit"] = verdict["helpful_across_perspectives"] >= SUBMIT_MIN_SCORE and not blocking
     verdict["blocking"] = blocking

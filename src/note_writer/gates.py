@@ -115,6 +115,23 @@ def normalize_note(text: str) -> str:
     return PREFIX_RE.sub("", "".join(out)).strip()
 
 
+def _norm_url(url: str) -> str:
+    try:
+        u = urlparse(url.strip())
+    except ValueError:
+        return url
+    host = (u.hostname or "").lower().removeprefix("www.").removeprefix("m.")
+    return f"{host}{u.path.rstrip('/')}" + (f"?{u.query}" if u.query else "")
+
+
+def unseen_urls(note_urls: List[str], seen_urls: List[str]) -> List[str]:
+    """Note URLs that the research step's search tools never returned, by exact page or by site.
+    A model citing a page it never opened is how hallucinated or non-supporting links get in."""
+    pages = {_norm_url(u) for u in seen_urls}
+    hosts = {_host(u) for u in seen_urls}
+    return [u for u in note_urls if _norm_url(u) not in pages and _host(u) not in hosts]
+
+
 @dataclass
 class GateResult:
     ok: bool
@@ -123,7 +140,7 @@ class GateResult:
     warnings: List[str] = field(default_factory=list)
 
 
-def check_note(text: str, check_urls: bool = True) -> GateResult:
+def check_note(text: str, check_urls: bool = True, seen_urls: Optional[List[str]] = None) -> GateResult:
     problems: List[str] = []
     urls = extract_urls(text)
 
@@ -152,6 +169,11 @@ def check_note(text: str, check_urls: bool = True) -> GateResult:
     for u in urls:
         if banned_url(u):
             problems.append(f"cites a source raters distrust or that is not a real source (AI chatbot, search link, shortener, dictionary): {u}")
+
+    # Only enforced when the research step returned citations at all (it can answer from memory).
+    if seen_urls:
+        for u in unseen_urls(urls, seen_urls):
+            problems.append(f"cites a page your search never returned; cite only pages you actually found: {u}")
 
     dead: List[str] = []
     if check_urls and urls:

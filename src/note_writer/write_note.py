@@ -4,6 +4,7 @@ from data_models import MisleadingTag, NoteResult, PostWithContext, ProposedMisl
 from note_writer.critic import critique
 from note_writer.gates import check_note, normalize_note
 from note_writer.llm_util import get_grok_search_json_response
+from outcomes import examples_for_prompt
 
 NO_NOTE_NEEDED = "NO NOTE NEEDED"
 NOT_ENOUGH_EVIDENCE = "NOT ENOUGH EVIDENCE"
@@ -12,18 +13,30 @@ NOTE_RESPONSE_SCHEMA = {
     "type": "object",
     "properties": {
         "decision": {"type": "string", "enum": ["WRITE NOTE", NO_NOTE_NEEDED, NOT_ENOUGH_EVIDENCE]},
+        # Evidence ledger first, note second: the model commits to what it verified before writing.
+        "post_claim": {"type": "string"},
+        "evidence": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {"fact": {"type": "string"}, "url": {"type": "string"}},
+                "required": ["fact", "url"],
+                "additionalProperties": False,
+            },
+        },
+        "assumptions": {"type": "array", "items": {"type": "string"}},
         "note_text": {"type": "string"},
         "misleading_tags": {
             "type": "array",
             "items": {"type": "string", "enum": [tag.value for tag in MisleadingTag]},
         },
     },
-    "required": ["decision", "note_text", "misleading_tags"],
+    "required": ["decision", "post_claim", "evidence", "assumptions", "note_text", "misleading_tags"],
     "additionalProperties": False,
 }
 
 
-def _get_prompt_for_note_writing(post_with_context_description: str):
+def _get_prompt_for_note_writing(post_with_context_description: str, examples: str = ""):
     return f"""Below will be a post on X. Do research on the post using web search and X search to determine if \
 the post is potentially misleading. Use X search to look up the post by its Post ID, \
 including any images or video in it, and any quoted or replied-to post by its Post ID. \
@@ -85,8 +98,16 @@ You may choose as many tags as apply, but you must choose at least one:
 - "misinterpreted_satire":  # the post is satire that may likely be misinterpreted as fact
 - "other":  # the post contains other misleading reasons
 
-If you are not writing a note, set note_text to an empty string and misleading_tags to an empty list.
+Before writing the note, fill in:
+- post_claim: the one specific, checkable claim in the post that the note corrects.
+- evidence: each fact the note states, with the URL of a page you actually opened in your search that states it.
+- assumptions: anything the note relies on that no source states directly (inferences, guesses about intent, \
+what an unverified video shows). The note must not depend on any of these. If it would have to, decide \
+"{NOT_ENOUGH_EVIDENCE}".
 
+If you are not writing a note, set note_text and post_claim to empty strings and evidence, assumptions and \
+misleading_tags to empty lists.
+{examples}
 Post:
 
     {post_with_context_description}
@@ -158,13 +179,14 @@ def research_post_and_write_note(
 ) -> NoteResult:
     post_with_context_description = _get_post_with_context_description_for_prompt(post_with_context)
 
-    note_prompt = _get_prompt_for_note_writing(post_with_context_description)
+    note_prompt = _get_prompt_for_note_writing(post_with_context_description, examples_for_prompt())
     history: list = []
     last_prompt = note_prompt
     try:
         response = get_grok_search_json_response(note_prompt, NOTE_RESPONSE_SCHEMA, image_urls=_image_urls(post_with_context))
     except Exception as e:
         return NoteResult(post=post_with_context, error=str(e), context_description=post_with_context_description)
+    seen_urls: list[str] = list(response.pop("_cited_urls", []))
 
     gate = None
     for round_ in range(MAX_REPAIR_ROUNDS + 1):
@@ -175,7 +197,7 @@ def research_post_and_write_note(
         problems: list[str] = []
         if not response["misleading_tags"]:
             problems.append("no misleading_tags chosen; choose at least one")
-        gate = check_note(response["note_text"])
+        gate = check_note(response["note_text"], seen_urls=seen_urls)
         problems += gate.problems
         if not problems:
             break
@@ -194,9 +216,10 @@ def research_post_and_write_note(
             response = get_grok_search_json_response(last_prompt, NOTE_RESPONSE_SCHEMA, history=history)
         except Exception as e:
             return NoteResult(post=post_with_context, error=str(e), context_description=post_with_context_description)
+        seen_urls += response.pop("_cited_urls", [])
 
     try:
-        verdict = critique(post_with_context, post_with_context_description, response["note_text"])
+        verdict = critique(post_with_context, post_with_context_description, response["note_text"], response.get("assumptions"))
     except Exception as e:
         return NoteResult(post=post_with_context, error=f"critic failed: {e}", context_description=post_with_context_description)
     if not verdict["submit"]:

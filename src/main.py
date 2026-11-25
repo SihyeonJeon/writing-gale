@@ -3,6 +3,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import List
 
@@ -12,7 +13,12 @@ from data_models import NoteResult, Post, PostWithContext
 import dotenv
 import ledger
 from selection import rank_posts
+from note_writer.llm_util import USAGE
 from note_writer.write_note import research_post_and_write_note
+from selection import prefilter_reason
+
+# Public CI logs: set LOG_POST_TEXT=0 to keep post text out of them (post id, decision and note still print).
+VERBOSE = os.getenv("LOG_POST_TEXT", "1") != "0"
 
 
 def _xurl_error_details(exc: Exception) -> str:
@@ -39,10 +45,15 @@ def _worker(
     Fetch and try to write and submit a note for one post.
     If `dry_run` is True, do not submit notes to the API, just print them to the console.
     """
+    reason = prefilter_reason(post_with_context)
+    if reason:
+        ledger.record(post_with_context.post.post_id, "prefilter_skip", reason=reason, test_mode=test_mode)
+        print(f"Post {post_with_context.post.post_id}: skipped before research ({reason})")
+        return
     note_result: NoteResult = research_post_and_write_note(post_with_context)
 
     log_strings: List[str] = ["-" * 20, f"Post: {post_with_context.post.post_id}", "-" * 20]
-    if note_result.context_description is not None:
+    if note_result.context_description is not None and VERBOSE:
         log_strings.append(
             f"\n*POST TEXT AND ANY QUOTED OR REPLIED-TO POST:*\n{note_result.context_description}\n"
         )
@@ -97,11 +108,33 @@ def main(
     dry_run: bool = False,
     concurrency: int = 1,
     test_mode: bool = True,
+    max_usd: float = 0.0,
+    daily_cap: int = 0,
+    daily_usd: float = 0.0,
 ):
     """
     Get up to `num_posts` recent posts eligible for notes and write notes for them.
     If `dry_run` is True, do not submit notes to the API, just print them to the console.
+    `max_usd` stops starting new posts once this run's xAI spend reaches it (0 = no limit).
+    `daily_cap` stops once this many notes were submitted in the last 24h (0 = no limit).
+    `daily_usd` caps xAI spend over the last 24h across runs (0 = no limit).
     """
+    if daily_usd:
+        spent = ledger.usd_last_24h()
+        print(f"Daily budget ${daily_usd:.2f}: ${spent:.2f} spent in the last 24h")
+        if spent >= daily_usd:
+            ledger.record("-", "run_summary", processed=0, reason="daily budget reached", test_mode=test_mode)
+            return
+        max_usd = min(max_usd, daily_usd - spent) if max_usd else daily_usd - spent
+    if daily_cap and not dry_run:
+        done_24h = ledger.submitted_last_24h(test_mode=test_mode)
+        remaining = daily_cap - done_24h
+        print(f"Daily cap {daily_cap}: {done_24h} submitted in the last 24h, {max(remaining, 0)} left")
+        if remaining <= 0:
+            ledger.record("-", "run_summary", processed=0, reason="daily cap reached", test_mode=test_mode)
+            return
+        # Most researched posts end without a note, so research a few more than the notes left.
+        num_posts = min(num_posts, remaining * 3)
 
     print(f"Getting up to {num_posts} recent posts eligible for notes (test_mode={test_mode})")
     try:
@@ -117,7 +150,8 @@ def main(
             "permissions (README step 2.1)."
         )
     print(f"Found {len(eligible_posts)} recent posts eligible for notes")
-    handled = ledger.handled_post_ids()
+    # In dry-run mode, posts already dry-run are skipped too, so a scheduled dry run doesn't pay twice.
+    handled = ledger.handled_post_ids(include_dry_run=dry_run)
     skipped = [p for p in eligible_posts if p.post.post_id in handled]
     eligible_posts = [p for p in eligible_posts if p.post.post_id not in handled]
     # Rank by freshness, spread, demand and media (see selection.py) and keep the top num_posts.
@@ -132,42 +166,61 @@ def main(
     )
     if len(eligible_posts) == 0:
         print("No posts to process.")
+        ledger.record("-", "run_summary", processed=0, test_mode=test_mode)
         return
+
+    submitted_before = ledger.submitted_last_24h(test_mode=test_mode)
+    state = {"started": 0}
+    lock = threading.Lock()
+
+    def run_one(post: PostWithContext) -> None:
+        with lock:
+            if max_usd and USAGE["usd"] >= max_usd:
+                return
+            if daily_cap and not dry_run and ledger.submitted_last_24h(test_mode=test_mode) >= daily_cap:
+                return
+            state["started"] += 1
+        _worker(post, dry_run, test_mode)
 
     if concurrency > 1:
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
-            futures = [
-                executor.submit(_worker, post, dry_run, test_mode) for post in eligible_posts
-            ]
-            for future in futures:
+            for future in [executor.submit(run_one, post) for post in eligible_posts]:
                 future.result()
     else:
         for post in eligible_posts:
-            _worker(post, dry_run, test_mode)
-    from note_writer.llm_util import CALLS
+            run_one(post)
 
-    print(f"Done. Grok API calls this run: {CALLS['n']}")
+    stopped = len(eligible_posts) - state["started"]
+    submitted = ledger.submitted_last_24h(test_mode=test_mode) - submitted_before
+    ledger.record(
+        "-", "run_summary", processed=state["started"], not_started=stopped, submitted=submitted,
+        llm_calls=USAGE["calls"], llm_usd=round(USAGE["usd"], 4), dry_run=dry_run, test_mode=test_mode,
+    )
+    print(
+        f"Done. Researched {state['started']} posts, submitted {submitted} notes. "
+        f"Grok: {USAGE['calls']} calls, ${USAGE['usd']:.3f}."
+        + (f" Stopped early (budget/cap), {stopped} posts left for the next run." if stopped else "")
+    )
 
 
 if __name__ == "__main__":
     dotenv.load_dotenv()
-    parser = argparse.ArgumentParser(description="Run note‑writing bot once.")
+    parser = argparse.ArgumentParser(description="Run note-writing bot once.")
+    parser.add_argument("--num-posts", type=int, default=10, help="Number of posts to process")
+    parser.add_argument("--fetch", type=int, default=50, help="How many eligible posts to fetch and rank (max 100)")
+    parser.add_argument("--dry-run", action="store_true", help="Do not submit notes to the API, just print them to the console")
+    parser.add_argument("--concurrency", type=int, default=1, help="Number of concurrent tasks to run")
     parser.add_argument(
-        "--num-posts", type=int, default=10, help="Number of posts to process"
+        "--max-usd", type=float, default=float(os.getenv("MAX_USD_PER_RUN") or 0),
+        help="Stop starting new posts once this run's xAI spend reaches this (0 = no limit)",
     )
     parser.add_argument(
-        "--fetch", type=int, default=50, help="How many eligible posts to fetch and rank (max 100)"
+        "--daily-cap", type=int, default=int(os.getenv("DAILY_NOTE_CAP") or 0),
+        help="Stop once this many notes were submitted in the last 24h (0 = no limit)",
     )
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Do not submit notes to the API, just print them to the console",
-    )
-    parser.add_argument(
-        "--concurrency",
-        type=int,
-        default=1,
-        help="Number of concurrent tasks to run",
+        "--daily-usd", type=float, default=float(os.getenv("DAILY_USD_CAP") or 0),
+        help="Cap xAI spend over the last 24h across runs (0 = no limit)",
     )
     args = parser.parse_args()
     _check_setup()
@@ -177,4 +230,7 @@ if __name__ == "__main__":
         dry_run=args.dry_run,
         concurrency=args.concurrency,
         test_mode=os.getenv("TEST_MODE", "true").strip().lower() != "false",
+        max_usd=args.max_usd,
+        daily_cap=args.daily_cap,
+        daily_usd=args.daily_usd,
     )

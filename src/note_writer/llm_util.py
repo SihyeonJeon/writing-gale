@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import threading
 import time
 
 import requests
@@ -8,13 +9,23 @@ import requests
 
 RETRYABLE_STATUS = {408, 409, 429, 500, 502, 503, 504}
 
-# Per-process count of billed API calls (HTTP attempts, including retries), printed by main.
-CALLS = {"n": 0}
+# Per-process usage, printed by main and used for the per-run budget.
+# xAI reports cost as usage.cost_in_usd_ticks (1 tick = 1e-10 USD).
+USAGE = {"calls": 0, "usd": 0.0}
+_usage_lock = threading.Lock()
+USD_PER_TICK = 1e-10
 
 
-def _make_request(payload: dict, max_attempts: int = 3) -> str:
+def _record_usage(data: dict | None) -> None:
+    ticks = ((data or {}).get("usage") or {}).get("cost_in_usd_ticks") or 0
+    with _usage_lock:
+        USAGE["calls"] += 1
+        USAGE["usd"] += ticks * USD_PER_TICK
+
+
+def _make_request(payload: dict, max_attempts: int = 3) -> tuple[str, list[str]]:
     """
-    Call the xAI Responses API and return the output text.
+    Call the xAI Responses API and return (output text, URLs the search tools cited).
     Retries timeouts, 429 and 5xx with exponential backoff.
     """
     responses_url = "https://api.x.ai/v1/responses"
@@ -23,7 +34,6 @@ def _make_request(payload: dict, max_attempts: int = 3) -> str:
         "Authorization": f"Bearer {os.getenv('XAI_API_KEY')}",
     }
     for attempt in range(1, max_attempts + 1):
-        CALLS["n"] += 1
         try:
             response = requests.post(responses_url, headers=headers, json=payload, timeout=300)
         except requests.RequestException as e:
@@ -31,6 +41,7 @@ def _make_request(payload: dict, max_attempts: int = 3) -> str:
                 raise Exception(f"Error making request: {e}") from e
             time.sleep(2**attempt)
             continue
+        _record_usage(response.json() if response.status_code == 200 else None)
         if response.status_code == 200:
             break
         if response.status_code in RETRYABLE_STATUS and attempt < max_attempts:
@@ -38,15 +49,21 @@ def _make_request(payload: dict, max_attempts: int = 3) -> str:
             continue
         raise Exception(f"Error making request: {response.status_code} {response.text}")
     data = response.json()
-    if data.get("output_text"):
-        return data["output_text"]
-    return "".join(
-        block.get("text", "")
+    blocks = [
+        block
         for item in data.get("output", [])
         if item.get("type") == "message"
         for block in item.get("content", [])
         if block.get("type") == "output_text"
-    )
+    ]
+    cited = [
+        a["url"]
+        for block in blocks
+        for a in block.get("annotations") or []
+        if a.get("type") == "url_citation" and a.get("url")
+    ]
+    text = data.get("output_text") or "".join(block.get("text", "") for block in blocks)
+    return text, cited
 
 
 IMAGE_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
@@ -85,6 +102,7 @@ def get_grok_search_json_response(
     """
     One call that lets Grok search the web and X, and answer with JSON
     matching `schema`. `history` is prior input/output turns for follow-up repair calls.
+    The returned dict also has "_cited_urls": pages the search tools actually returned.
     """
     payload = {
         "model": model,
@@ -104,4 +122,7 @@ def get_grok_search_json_response(
         },
         "store": False,
     }
-    return json.loads(_make_request(payload))
+    text, cited = _make_request(payload)
+    result = json.loads(text)
+    result["_cited_urls"] = cited
+    return result

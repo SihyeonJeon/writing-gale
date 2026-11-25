@@ -36,6 +36,23 @@ TOPIC_WEIGHTS = [
 ]
 
 
+_STRIP_RE = re.compile(r"https?://\S+|@\w+|#\w+")
+
+
+def prefilter_reason(pwc: PostWithContext) -> str:
+    """Cheap rule-based skip before any LLM call; '' means research the post.
+    Deliberately conservative: a wrongly skipped post costs a possible helpful note."""
+    texts = [pwc.post.text or ""]
+    if pwc.quoted_post:
+        texts.append(pwc.quoted_post.text or "")
+    stripped = _STRIP_RE.sub(" ", " ".join(texts))
+    has_media = bool(pwc.post.media) or bool(pwc.quoted_post and pwc.quoted_post.media)
+    # Character count too, so languages written without spaces (Japanese, Chinese) aren't skipped.
+    if not has_media and len(stripped.split()) < 4 and len("".join(stripped.split())) < 20:
+        return "no media and almost no text, nothing to fact-check"
+    return ""
+
+
 def topic_weight(text: str) -> float:
     w = 1.0
     for rx, mult in TOPIC_WEIGHTS:

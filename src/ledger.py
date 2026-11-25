@@ -11,14 +11,14 @@ Location: data/ledger.jsonl (gitignored). Override with LEDGER_PATH.
 import json
 import os
 import threading
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Set
+from typing import Any, Dict, List, Set
 
 _lock = threading.Lock()
 
 # Decisions that mean "don't look at this post again". Errors are retried on later runs.
-FINAL_DECISIONS = {"critic_skip", "submitted", "duplicate", "NO NOTE NEEDED", "NOT ENOUGH EVIDENCE", "gate_failed", "dry_run"}
+FINAL_DECISIONS = {"prefilter_skip", "critic_skip", "submitted", "duplicate", "NO NOTE NEEDED", "NOT ENOUGH EVIDENCE", "gate_failed", "dry_run"}
 
 
 def ledger_path() -> Path:
@@ -55,3 +55,33 @@ def record(post_id: str, decision: str, **fields: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with _lock, path.open("a") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def records_since(hours: float = 24) -> List[Dict[str, Any]]:
+    path = ledger_path()
+    if not path.exists():
+        return []
+    since = datetime.now(timezone.utc) - timedelta(hours=hours)
+    out = []
+    with path.open() as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+                if datetime.fromisoformat(rec["ts"]) >= since:
+                    out.append(rec)
+            except (json.JSONDecodeError, KeyError, ValueError):
+                continue
+    return out
+
+
+def submitted_last_24h(test_mode: bool) -> int:
+    """Notes submitted in the last 24 hours in this mode (for the daily cap)."""
+    return sum(
+        1 for r in records_since(24)
+        if r.get("decision") == "submitted" and bool(r.get("test_mode", True)) == test_mode
+    )
+
+
+def usd_last_24h() -> float:
+    """xAI spend over the last 24 hours, from the per-run summaries."""
+    return sum(float(r.get("llm_usd") or 0) for r in records_since(24) if r.get("decision") == "run_summary")

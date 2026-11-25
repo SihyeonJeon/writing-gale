@@ -1,69 +1,128 @@
-name: Starter AI Note Writer
+name: Note Writer
+
+# One switch controls the scheduled runs: the repository variable WRITER_MODE
+# (Settings > Secrets and variables > Actions > Variables, or `gh variable set WRITER_MODE --body <mode>`).
+#   off      scheduled runs exit at once and cost nothing (default when unset)
+#   dry_run  research and write notes but don't submit; results go to the ledger and log
+#   live     submit notes (test mode until TEST_MODE=false)
+# The switch is for the whole writer. Approving individual notes by hand is against the contest rules.
+#
+# Other variables (all optional): NUM_POSTS (posts researched per run, default 3), DAILY_NOTE_CAP
+# (default 10), MAX_USD_PER_RUN (default 0.5), DAILY_USD_CAP (default 5), TEST_MODE (default true).
 
 on:
-  # Run by hand from the Actions tab: Actions > Starter AI Note Writer > Run workflow
   workflow_dispatch:
     inputs:
+      mode:
+        description: "Run mode for this run only (use-variable = follow WRITER_MODE)"
+        type: choice
+        options: [use-variable, dry_run, live]
+        default: use-variable
       num_posts:
-        description: "Number of posts to process"
-        default: "10"
-      concurrency:
-        description: "Number of posts to process at a time"
-        default: "1"
-      dry_run:
-        description: "Write notes but do not submit them"
-        type: boolean
-        default: false
+        description: "Posts to research (blank = NUM_POSTS variable)"
+        default: ""
+  schedule:
+    # Every 30 minutes, off the top of the hour (scheduled runs are delayed most at :00).
+    - cron: "7,37 * * * *"
 
-  # Uncomment the two lines below to run on a schedule. This example runs every 6 hours (UTC).
-  # Every run costs X API and xAI credits, so pick a schedule you can afford.
-  #schedule:
-  #  - cron: "0 */6 * * *"
-
-# Never run two copies of the writer at the same time
+# Never run two copies at once: they would share the ledger and the daily caps.
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   write_notes:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      MODE: ${{ (inputs.mode != '' && inputs.mode != 'use-variable') && inputs.mode || vars.WRITER_MODE || 'off' }}
     steps:
+      - name: Check the WRITER_MODE switch
+        id: switch
+        run: |
+          echo "mode=$MODE"
+          case "$MODE" in
+            dry_run|live) echo "run=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "run=false" >> "$GITHUB_OUTPUT"
+               echo "Writer is paused (WRITER_MODE=$MODE)." >> "$GITHUB_STEP_SUMMARY" ;;
+          esac
+
       - name: Check out repository
+        if: steps.switch.outputs.run == 'true'
         uses: actions/checkout@v4
 
       - name: Install uv
+        if: steps.switch.outputs.run == 'true'
         uses: astral-sh/setup-uv@v5
 
       - name: Install the project
-        run: uv sync --locked
+        if: steps.switch.outputs.run == 'true'
+        run: uv sync --locked && mkdir -p data
+
+      # A broken push fails here, before any API credits are spent.
+      - name: Offline tests
+        if: steps.switch.outputs.run == 'true'
+        run: uv run python -m unittest discover -s tests
+
+      # data/ holds the ledger (posts already handled, spend, submissions) and cached note scores.
+      # Kept in the Actions cache, which only this repo's workflows can read.
+      - name: Restore writer state
+        if: steps.switch.outputs.run == 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: data
+          key: writer-data-${{ github.run_id }}
+          restore-keys: writer-data-
 
       - name: Install xurl
+        if: steps.switch.outputs.run == 'true'
         run: |
           curl -fsSL https://raw.githubusercontent.com/xdevplatform/xurl/main/install.sh | bash
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Log in to xurl with OAuth 1.0a
-        run: xurl auth oauth1 --consumer-key "$X_API_KEY" --consumer-secret "$X_API_KEY_SECRET" --access-token "$X_ACCESS_TOKEN" --token-secret "$X_ACCESS_TOKEN_SECRET"
-        # Stored under Settings > Secrets and variables > Actions > Secrets
+        if: steps.switch.outputs.run == 'true'
+        run: xurl auth oauth1 --consumer-key "$X_API_KEY" --consumer-secret "$X_API_KEY_SECRET" --access-token "$X_ACCESS_TOKEN" --token-secret "$X_ACCESS_TOKEN_SECRET" > /dev/null
         env:
           X_API_KEY: ${{ secrets.X_API_KEY }}
           X_API_KEY_SECRET: ${{ secrets.X_API_KEY_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
 
+      # Our own notes' scores, used as style examples. X API only, no LLM calls.
+      - name: Refresh note outcomes
+        if: steps.switch.outputs.run == 'true'
+        continue-on-error: true
+        run: uv run src/outcomes.py
+        env:
+          TEST_MODE: ${{ vars.TEST_MODE || 'true' }}
+
       - name: Run the writer
+        if: steps.switch.outputs.run == 'true'
         run: |
-          ARGS="--num-posts ${NUM_POSTS} --concurrency ${CONCURRENCY}"
-          if [ "${DRY_RUN}" = "true" ]; then ARGS="$ARGS --dry-run"; fi
+          ARGS="--num-posts ${NUM_POSTS} --fetch 100"
+          if [ "$MODE" = "dry_run" ]; then ARGS="$ARGS --dry-run"; fi
           uv run src/main.py $ARGS
         env:
-          # Scheduled runs have no inputs, so they use the defaults after ||
-          NUM_POSTS: ${{ inputs.num_posts || '10' }}
-          CONCURRENCY: ${{ inputs.concurrency || '1' }}
-          DRY_RUN: ${{ inputs.dry_run || false }}
-          # Secret, stored under Settings > Secrets and variables > Actions > Secrets
-          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
-          # Variable, stored under Settings > Secrets and variables > Actions > Variables.
-          # Leave it unset (or "true") until X admits your writer, then set it to "false".
+          NUM_POSTS: ${{ inputs.num_posts || vars.NUM_POSTS || '3' }}
+          DAILY_NOTE_CAP: ${{ vars.DAILY_NOTE_CAP || '10' }}
+          MAX_USD_PER_RUN: ${{ vars.MAX_USD_PER_RUN || '0.5' }}
+          DAILY_USD_CAP: ${{ vars.DAILY_USD_CAP || '5' }}
           TEST_MODE: ${{ vars.TEST_MODE || 'true' }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          # Logs of a public repo are public: keep post text out of them.
+          LOG_POST_TEXT: "0"
+
+      - name: Save writer state
+        if: always() && steps.switch.outputs.run == 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: data
+          key: writer-data-${{ github.run_id }}
+
+      - name: Report
+        if: always() && steps.switch.outputs.run == 'true'
+        run: uv run src/run_report.py >> "$GITHUB_STEP_SUMMARY"
