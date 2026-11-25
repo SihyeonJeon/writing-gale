@@ -53,10 +53,17 @@ def _all_required(schema: dict) -> bool:
 class Gates(unittest.TestCase):
     def test_normalize(self):
         self.assertEqual(
-            normalize_note("Community Note: From 2019 — not 2024 https://a.com/x–y"),
-            "From 2019, not 2024 https://a.com/x–y",
+            normalize_note("Community Note: From 2019 \u2014 not 2024 https://a.com/x\u2013y"),
+            "From 2019, not 2024\n\nhttps://a.com/x\u2013y",
         )
-        self.assertEqual(normalize_note("Rose 3–5% https://b.org"), "Rose 3-5% https://b.org")
+        self.assertEqual(normalize_note("Rose 3\u20135% https://b.org"), "Rose 3-5%\n\nhttps://b.org")
+        # a link in the middle moves to the end, each link on its own line, no leftover punctuation
+        self.assertEqual(
+            normalize_note("From a 1981 book. https://a.org/b No other record exists. https://c.org/d."),
+            "From a 1981 book. No other record exists.\n\nhttps://a.org/b\nhttps://c.org/d",
+        )
+        once = normalize_note("Point one. https://a.org/b https://c.org/d")
+        self.assertEqual(normalize_note(once), once)
 
     def test_unseen(self):
         seen = ["https://www.reuters.com/world/a-b/", "https://apnews.com/article/x"]
@@ -105,6 +112,13 @@ class Selection(unittest.TestCase):
         self.assertEqual(prefilter_reason(_post("lol", media=True)), "")
         self.assertEqual(prefilter_reason(_post("This photo shows the 2024 flood in Valencia")), "")
         self.assertEqual(prefilter_reason(_post("東京で昨日大きな地震があり多数の建物が倒壊した")), "")
+
+    def test_checkable(self):
+        from selection import checkable_weight
+        story = _post("I got in my car and I found my keys, we were shocked")
+        claim = _post("BREAKING: officials confirmed 40% of ballots were destroyed")
+        self.assertLess(checkable_weight(story), 1.0)
+        self.assertGreater(checkable_weight(claim), 1.0)
 
     def test_rank_prefers_fresh(self):
         ranked = rank_posts([_post("old claim here", 30, likes=90000, pid="old"), _post("new claim here", 1, likes=6900, pid="new")])

@@ -56,6 +56,28 @@ def prefilter_reason(pwc: PostWithContext) -> str:
     return ""
 
 
+# First guesses, to be re-fit on our own results: replies and first-person stories are mostly opinion or
+# unverifiable; figures, attributions and "breaking"-style framing are what notes usually correct.
+_ANECDOTE_RE = re.compile(r"\b(I|my|me|we|our)\b")
+_CLAIM_RE = re.compile(
+    r"\d{2,}|%|\bbreaking\b|\bconfirmed\b|\bannounced?\b|\breport(?:s|ed|edly)?\b|\bleaked\b|\bofficial"
+    r"|\bstudy\b|\bdata\b|\bvideo\b|\bphoto\b|\bfootage\b|\bshows?\b|\bsaid\b|\baccording to\b",
+    re.I,
+)
+
+
+def checkable_weight(pwc: PostWithContext) -> float:
+    text = pwc.post.text or ""
+    w = 1.0
+    if _CLAIM_RE.search(text):
+        w *= 1.3
+    if pwc.in_reply_to_post is not None or text.lstrip().startswith("@"):
+        w *= 0.7
+    if len(_ANECDOTE_RE.findall(text)) >= 3 and not pwc.post.media:
+        w *= 0.6
+    return w
+
+
 def topic_weight(text: str) -> float:
     w = 1.0
     for rx, mult in TOPIC_WEIGHTS:
@@ -91,7 +113,13 @@ def score_post(pwc: PostWithContext, now: datetime | None = None) -> Tuple[float
         "media": MEDIA_BOOST if has_media else 1.0,
         "topic": topic_weight(" ".join(t for t in [pwc.post.text, pwc.quoted_post.text if pwc.quoted_post else ""] if t)),
     }
-    score = parts["topic"] * parts["media"] * parts["fresh"] * (1 + parts["spread"] + 0.5 * parts["demand"])
+    parts["checkable"] = checkable_weight(pwc)
+    # Note requests weigh more than raw spread: a viral opinion or anecdote gets no note, while a post
+    # people asked to have checked usually has something checkable in it.
+    score = (
+        parts["topic"] * parts["media"] * parts["fresh"] * parts["checkable"]
+        * (1 + 0.5 * parts["spread"] + 1.0 * parts["demand"])
+    )
     parts["age_h"] = round(age, 2)
     parts["velocity"] = round(velocity, 1)
     return score, parts

@@ -79,7 +79,10 @@ conventional explosives ...". Do not open with "This post is misleading" or othe
 - Every name, number and date in the note must appear on a page you cite. Do not sharpen, round up or \
 extend what the source says. If no source directly addresses the central claim, decide \
 "{NOT_ENOUGH_EVIDENCE}".
-- One or two short sentences, roughly 80 to 220 characters of text. Specific names, dates and numbers.
+- Make one point: the single fact that most directly answers the post's central claim. Add a second \
+sentence only if the first cannot be understood without it. Do not stack further corrections or background; \
+each extra fact is another thing a rater can dispute. One or two short sentences, roughly 60 to 200 \
+characters of text, with the specific name, date or number that matters.
 - Cite two independent sources when you can. Best sources, in order: the original/primary source \
 (the original video or post, the official record, statute, court filing, company or agency statement, \
 dataset), a dedicated fact-check article, then major news reports. For recycled or out-of-context media, \
@@ -99,7 +102,7 @@ wrong date or place, a misattributed quote) with a primary or scholarly source; 
 "{NO_NOTE_NEEDED}" or "{NOT_ENOUGH_EVIDENCE}".
 - No evaluative labels for the claim or its sources (uncorroborated, baseless, debunked, false, hoax, \
 conspiracy theory). Say what the record shows and let readers judge.
-- Put all URLs at the end, after the last sentence.
+- Put all URLs at the end, after the last sentence (they are shown on their own lines).
 - For a video, rely only on the attached frames, the transcript (when given) and what your search verifies. \
 Do not describe parts of a video you have not seen.
 

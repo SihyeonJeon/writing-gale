@@ -65,7 +65,7 @@ def extract_urls(text: str) -> List[str]:
 
 
 def text_length_without_urls(text: str) -> int:
-    return len(URL_RE.sub("", text).strip())
+    return len(re.sub(r"\s+", " ", URL_RE.sub("", text)).strip())
 
 
 SOFT_REDIRECT = 310  # our own code: the link answered 200 but landed on the site's front page
@@ -118,18 +118,28 @@ BLOCKED_STATUSES = {401, 403, 429, 999}
 
 
 def normalize_note(text: str) -> str:
-    """Fix style problems that don't need another LLM call: dashes and label prefixes.
-    URLs are left untouched."""
+    """Fix style and layout without another LLM call: dashes, label prefixes, and links.
+    Layout follows how people write notes that get rated helpful: the point first, then a blank
+    line, then each source link on its own line. URLs themselves are left untouched."""
     parts = re.split(f"({URL_RE.pattern})", text)
-    out = []
+    body, urls = [], []
     for i, part in enumerate(parts):
-        if i % 2 == 1:  # URL
-            out.append(part)
+        if i % 2 == 1:  # URL; sentence punctuation stuck to it goes back to the text
+            url = part.rstrip(TRAILING_PUNCT)
+            if url not in urls:
+                urls.append(url)
+            body.append(part[len(url):])
             continue
-        part = re.sub(r"(\d)\s*[–—]\s*(\d)", r"\1-\2", part)  # number ranges
-        part = re.sub(r"\s*[—–]\s*", ", ", part)
-        out.append(part)
-    return PREFIX_RE.sub("", "".join(out)).strip()
+        part = re.sub(r"(\d)\s*[\u2013\u2014]\s*(\d)", r"\1-\2", part)  # number ranges
+        part = re.sub(r"\s*[\u2014\u2013]\s*", ", ", part)
+        body.append(part)
+    prose = re.sub(r"\s+", " ", "".join(body))
+    prose = re.sub(r"\s+([.,;:!?])", r"\1", prose)
+    prose = re.sub(r"([.!?])[.,;:]+", r"\1", prose)  # "sentence. ." left where a link was lifted out
+    prose = PREFIX_RE.sub("", prose).strip(" ,;:")
+    if not urls:
+        return prose
+    return (prose + "\n\n" if prose else "") + "\n".join(urls)
 
 
 def _norm_url(url: str) -> str:

@@ -82,11 +82,17 @@ def _worker(
 
     if note_result.note is not None and not dry_run:
         try:
-            response = submit_note(
-                note=note_result.note,
-                test_mode=test_mode,
-                verbose_if_failed=False,
-            )
+            try:
+                response = submit_note(note=note_result.note, test_mode=test_mode, verbose_if_failed=False)
+            except Exception as first:
+                # If the API objects to the line breaks before the links, the research is already paid
+                # for: send the same note on one line instead of losing it.
+                if "already created a note" in _xurl_error_details(first) or "\n" not in note_result.note.note_text:
+                    raise
+                log_strings.append(f"\n*RETRYING ON ONE LINE* after: {_xurl_error_details(first)[:300]}\n")
+                note_result.note.note_text = " ".join(note_result.note.note_text.split())
+                note_text = note_result.note.note_text
+                response = submit_note(note=note_result.note, test_mode=test_mode, verbose_if_failed=False)
             data = response.get("data", {})
             note_id = data.get("id") or data.get("note_id")
             log_strings.append(f"\n*SUCCESSFULLY SUBMITTED NOTE*\nNote ID: {note_id}\n")
