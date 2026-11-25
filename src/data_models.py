@@ -34,6 +34,9 @@ class Media(BaseModel):
     width: Optional[int] = None
     duration_ms: Optional[int] = None
     view_count: Optional[int] = None
+    alt_text: Optional[str] = None
+    # Video files the API lists for this media: [{"content_type": "video/mp4", "bit_rate": int, "url": str}]
+    variants: List[Dict[str, Any]] = []
 
 
 class Post(BaseModel):

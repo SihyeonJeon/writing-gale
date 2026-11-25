@@ -33,6 +33,9 @@ TOPIC_WEIGHTS = [
     (re.compile(r"\bIsrael|\bGaza|\bPalestin|\bHamas\b|\bZionis|\bIDF\b", re.I), 0.6),
     (re.compile(r"\belection|\bballot|\bvoter fraud|\brigged\b", re.I), 0.6),
     (re.compile(r"\bimmigra|\bmigrant|\bdeport|\billegals?\b", re.I), 0.7),
+    # Historical atrocities: notes here read as denial unless they fix a concrete detail; first test
+    # note on such a post scored ClaimOpinion low.
+    (re.compile(r"\bgenocid|\bmassacre|\bholocaust|\bslavery\b|\bcoloni[sz]|\bwar crimes?\b|\bethnic cleansing", re.I), 0.5),
 ]
 
 

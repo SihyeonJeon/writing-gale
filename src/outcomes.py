@@ -67,7 +67,7 @@ def load() -> List[Dict]:
 
 def scores(note: Dict) -> Dict[str, str]:
     outcomes = (note.get("test_result") or {}).get("evaluation_outcome") or []
-    return {o.get("evaluator_type"): o.get("evaluator_score_bucket") for o in outcomes}
+    return {o.get("evaluator_type"): str(o.get("evaluator_score_bucket") or "").lower() for o in outcomes}
 
 
 def classify(note: Dict) -> str:

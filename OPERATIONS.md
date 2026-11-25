@@ -41,11 +41,14 @@ requires a fully automated writer.
 
 1. Rank eligible posts by freshness, spread, note requests, media and topic (`src/selection.py`).
 2. Skip posts with nothing to check before any LLM call.
-3. Research and draft with Grok (web + X search, post images). The model lists the claim, each fact with
-   the page it came from, and any assumptions, before writing the note.
-4. Deterministic gates: length, URL present and live, cited pages must come from the search results,
-   banned source types, style. One repair round, then give up.
-5. Critic pass rates the note as raters from different perspectives would; only clear passes are submitted.
+3. For a post with video: download the smallest MP4 the API lists, take 4 frames and transcribe the audio
+   locally (Whisper). Nothing is kept after the run.
+4. Research and draft with Grok (web + X search, post images, video frames, transcript). The model lists
+   the claim, each fact with the page it came from, and any assumptions, before writing the note.
+5. Deterministic gates: length, URL present and live (a deep link that lands on a front page counts as
+   dead), cited pages must come from the search results, banned source types, style. Then the cited pages
+   are opened and the note's numbers and names must be on them. One repair round, then give up.
+6. Critic pass rates the note as raters from different perspectives would; only clear passes are submitted.
 
 GitHub disables scheduled workflows in public repos after 60 days without commits; push something
 before that.

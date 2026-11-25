@@ -86,7 +86,7 @@ def admission_report(notes: List[Dict], window: int = 50) -> List[str]:
     for evaluator, bucket, op, target in ADMISSION:
         got = sum(
             1 for n in scored
-            if any(o["evaluator_type"] == evaluator and o["evaluator_score_bucket"] == bucket for o in _evaluation_outcomes(n))
+            if any(o["evaluator_type"] == evaluator and str(o["evaluator_score_bucket"]).lower() == bucket for o in _evaluation_outcomes(n))
         ) / len(scored)
         ok = got >= target if op == ">=" else got <= target
         all_ok &= ok

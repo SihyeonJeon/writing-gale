@@ -22,7 +22,8 @@ TRAILING_PUNCT = ".,;:!?"
 EMOJI_RE = re.compile("[\U0001f300-\U0001faff\U00002600-\U000027bf\U0001f000-\U0001f2ff]")
 OPINION_RE = re.compile(
     r"\b(i think|i believe|in my opinion|clearly|obviously|probably|likely|seems|appears to|"
-    r"we should|shameful|disgusting|ridiculous|lies|liar|propaganda)\b",
+    r"we should|shameful|disgusting|ridiculous|lies|liar|propaganda|"
+    r"uncorroborated|baseless|debunked|hoax|conspiracy theor(?:y|ies)|so-called)\b",
     re.IGNORECASE,
 )
 PREFIX_RE = re.compile(r"^\s*(community note|note|context)\s*:", re.IGNORECASE)
@@ -67,6 +68,27 @@ def text_length_without_urls(text: str) -> int:
     return len(URL_RE.sub("", text).strip())
 
 
+SOFT_REDIRECT = 310  # our own code: the link answered 200 but landed on the site's front page
+
+
+def _landed_elsewhere(requested: str, final: str) -> bool:
+    """A deep link that ends on the bare front page is a removed article, not a source."""
+    try:
+        a, b = urlparse(requested), urlparse(final)
+    except ValueError:
+        return False
+    return len(a.path.strip("/")) > 0 and b.path.strip("/") == "" and not b.query
+
+
+def _fetch_status(url: str, method: str, timeout: float, headers: dict) -> int:
+    r = requests.request(method, url, allow_redirects=True, timeout=timeout, headers=headers, stream=True)
+    status = r.status_code
+    if status == 200 and _landed_elsewhere(url, r.url):
+        status = SOFT_REDIRECT
+    r.close()
+    return status
+
+
 def url_status(url: str, timeout: float = 10.0) -> Optional[int]:
     """Final HTTP status after redirects, or None on network error. Cached per process."""
     if url in _url_cache:
@@ -74,20 +96,15 @@ def url_status(url: str, timeout: float = 10.0) -> Optional[int]:
     status: Optional[int] = None
     headers = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*"}
     try:
-        r = requests.head(url, allow_redirects=True, timeout=timeout, headers=headers)
-        status = r.status_code
+        status = _fetch_status(url, "HEAD", timeout, headers)
         # Many sites reject HEAD (403/405) but serve GET fine; the evaluator cares about GET.
         if status != 200:
-            r = requests.get(url, allow_redirects=True, timeout=timeout, headers=headers, stream=True)
-            status = r.status_code
-            r.close()
+            status = _fetch_status(url, "GET", timeout, headers)
     except requests.RequestException:
         status = None
     if status is None:  # one retry for transient network errors / slow hosts
         try:
-            r = requests.get(url, allow_redirects=True, timeout=20, headers=headers, stream=True)
-            status = r.status_code
-            r.close()
+            status = _fetch_status(url, "GET", 20, headers)
         except requests.RequestException:
             status = None
     _url_cache[url] = status
@@ -188,6 +205,7 @@ def check_note(text: str, check_urls: bool = True, seen_urls: Optional[List[str]
                 warnings.append(f"URL bot-blocked from here (HTTP {s}), may still be fine: {u}")
             else:
                 dead.append(u)
-                problems.append(f"URL does not return HTTP 200 (got {s}): {u}")
+                why = "redirects to the site's front page, so the article is gone" if s == SOFT_REDIRECT else f"got {s}"
+                problems.append(f"URL does not return HTTP 200 ({why}): {u}")
 
     return GateResult(ok=not problems, problems=problems, dead_urls=dead, warnings=warnings)

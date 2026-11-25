@@ -82,8 +82,11 @@ def _inline_image(url: str) -> str | None:
     return f"data:{ctype};base64,{base64.b64encode(r.content).decode()}"
 
 
+MAX_IMAGES = 8  # post images plus video frames
+
+
 def _content(prompt: str, image_urls: list[str] | None):
-    images = [d for d in (_inline_image(u) for u in (image_urls or [])[:4]) if d]
+    images = [d for d in (u if u.startswith("data:") else _inline_image(u) for u in (image_urls or [])[:MAX_IMAGES]) if d]
     if not images:
         return prompt
     return [{"type": "input_text", "text": prompt}] + [

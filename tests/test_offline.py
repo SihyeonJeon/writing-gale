@@ -20,7 +20,8 @@ import outcomes  # noqa: E402
 from check_scores import admission_report  # noqa: E402
 from data_models import Media, Post, PostWithContext  # noqa: E402
 from note_writer import critic  # noqa: E402
-from note_writer.gates import check_note, normalize_note, unseen_urls  # noqa: E402
+from note_writer.gates import _landed_elsewhere, check_note, normalize_note, unseen_urls  # noqa: E402
+from note_writer.support import specifics, unsupported_specifics  # noqa: E402
 from note_writer.write_note import NOTE_RESPONSE_SCHEMA, _get_prompt_for_note_writing  # noqa: E402
 from selection import prefilter_reason, rank_posts  # noqa: E402
 
@@ -72,6 +73,32 @@ class Gates(unittest.TestCase):
         self.assertFalse(check_note("See https://grok.com/share/abc", check_urls=False).ok)
 
 
+class Support(unittest.TestCase):
+    NOTE = "The Army describes a detonation of lead azide at the Iowa plant affecting 148 square miles. https://army.mil/a"
+
+    def test_specifics(self):
+        nums, names = specifics(self.NOTE)
+        self.assertEqual(nums, ["148"])
+        self.assertEqual(names, ["Army", "Iowa"])
+
+    def test_dates_and_possessives(self):
+        nums, names = specifics("Per Janine Roberts' 1981 book, the blast on Nov. 25, 2026 and 3 March 2024 hit Texas. https://a.org")
+        self.assertEqual(nums, ["1981", "2024", "2026"])
+        self.assertEqual(names, ["Janine", "Roberts", "Texas"])
+
+    def test_missing_and_present(self):
+        page = ("the army announced a controlled detonation of lead azide in iowa. " * 40)
+        self.assertEqual(unsupported_specifics(self.NOTE, {"https://army.mil/a": page}), ["148"])
+        self.assertEqual(unsupported_specifics(self.NOTE, {"https://army.mil/a": page + " 148 square miles"}), [])
+        # unreadable or thin pages: can't check, so no complaint
+        self.assertEqual(unsupported_specifics(self.NOTE, {"https://army.mil/a": None}), [])
+
+    def test_soft_redirect(self):
+        self.assertTrue(_landed_elsewhere("https://a.com/news/x", "https://a.com/"))
+        self.assertFalse(_landed_elsewhere("https://a.com/news/x", "https://a.com/news/x-new"))
+        self.assertFalse(_landed_elsewhere("https://a.com/", "https://www.a.com/"))
+
+
 class Selection(unittest.TestCase):
     def test_prefilter(self):
         self.assertTrue(prefilter_reason(_post("lol")))
@@ -107,9 +134,9 @@ class Ledger(unittest.TestCase):
 
 
 def _note(i, text, status="", co=None, uv="high"):
-    outs = [{"evaluator_type": "UrlValidity", "evaluator_score_bucket": uv}, {"evaluator_type": "HarassmentAbuse", "evaluator_score_bucket": "high"}]
+    outs = [{"evaluator_type": "UrlValidity", "evaluator_score_bucket": uv.capitalize()}, {"evaluator_type": "HarassmentAbuse", "evaluator_score_bucket": "High"}]
     if co:
-        outs.append({"evaluator_type": "ClaimOpinion", "evaluator_score_bucket": co})
+        outs.append({"evaluator_type": "ClaimOpinion", "evaluator_score_bucket": co.capitalize()})  # API sends "High"
     return {"id": str(i), "info": {"text": text}, "status": status, "test_result": {"evaluation_outcome": outs}, "test_mode": True}
 
 
