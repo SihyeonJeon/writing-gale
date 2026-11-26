@@ -106,6 +106,40 @@ class Support(unittest.TestCase):
         self.assertFalse(_landed_elsewhere("https://a.com/", "https://www.a.com/"))
 
 
+class Benchmark(unittest.TestCase):
+    def test_lookup(self):
+        import benchmark as b
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "exemplars.jsonl").write_text("\n".join(json.dumps(x) for x in [
+                {"id": "1", "post_id": "10", "text": "The video shows a fireworks factory explosion in Malta in June, not Ukraine. https://bbc.com/a"},
+                {"id": "2", "post_id": "11", "text": "The bridge photo is from a 2019 flood in Venice. https://reuters.com/b"},
+                {"id": "3", "post_id": "12", "text": "Senate rules require sixty votes for cloture. https://senate.gov/c"},
+            ]))
+            (Path(d) / "domains.json").write_text(json.dumps({"base": {"notes": 1000, "helpful": 0.1, "not_helpful": 0.02},
+                "domains": {"bad.example": {"notes": 300, "helpful": 0.05, "not_helpful": 0.06}, "ok.example": {"notes": 300, "helpful": 0.1, "not_helpful": 0.02}}}))
+            (Path(d) / "posts.json").write_text(json.dumps({"10": [3, 1], "11": [1, 0]}))
+            old = b.DIR
+            b.DIR = Path(d)
+            for f in (b._index, b._domains, b._posts):
+                f.cache_clear()
+            try:
+                post = "Huge explosion at a fireworks factory in Malta caught on video"
+                self.assertEqual([h["id"] for h in b.similar_helpful_notes(post)], ["1"])
+                self.assertEqual(b.similar_helpful_notes(post, post_id="10"), [])  # never the same post
+                self.assertIn("bad.example", b.distrusted_domain("https://www.bad.example/x"))
+                self.assertIsNone(b.distrusted_domain("https://ok.example/x"))
+                self.assertEqual(b.post_outcome("10"), (3, True))
+                self.assertIsNone(b.post_outcome("99"))
+            finally:
+                b.DIR = old
+                for f in (b._index, b._domains, b._posts):
+                    f.cache_clear()
+
+    def test_cjk_tokens(self):
+        import benchmark as b
+        self.assertIn("地震", b.tokens("東京で地震があった"))
+
+
 class Selection(unittest.TestCase):
     def test_prefilter(self):
         self.assertTrue(prefilter_reason(_post("lol")))

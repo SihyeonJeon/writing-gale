@@ -85,3 +85,33 @@ def submitted_last_24h(test_mode: bool) -> int:
 def usd_last_24h() -> float:
     """xAI spend over the last 24 hours, from the per-run summaries."""
     return sum(float(r.get("llm_usd") or 0) for r in records_since(24) if r.get("decision") == "run_summary")
+
+
+def seen_post_ids() -> Set[str]:
+    path = ledger_path()
+    if not path.exists():
+        return set()
+    out: Set[str] = set()
+    with path.open() as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if rec.get("decision") == "seen":
+                out.add(str(rec.get("post_id")))
+    return out
+
+
+def all_records() -> List[Dict[str, Any]]:
+    path = ledger_path()
+    if not path.exists():
+        return []
+    out = []
+    with path.open() as f:
+        for line in f:
+            try:
+                out.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return out

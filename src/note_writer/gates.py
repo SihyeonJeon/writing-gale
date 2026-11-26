@@ -17,6 +17,8 @@ from urllib.parse import urlparse
 
 import requests
 
+from benchmark import distrusted_domain
+
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 TRAILING_PUNCT = ".,;:!?"
 EMOJI_RE = re.compile("[\U0001f300-\U0001faff\U00002600-\U000027bf\U0001f000-\U0001f2ff]")
@@ -194,6 +196,9 @@ def check_note(text: str, check_urls: bool = True, seen_urls: Optional[List[str]
         problems.append(f'note contains opinion/hedging wording: "{m.group(0)}"')
 
     for u in urls:
+        why = None if banned_url(u) else distrusted_domain(u)
+        if why:
+            problems.append(f"cites a domain whose notes raters reject unusually often ({why}); use another source: {u}")
         if banned_url(u):
             problems.append(f"cites a source raters distrust or that is not a real source (AI chatbot, search link, shortener, dictionary): {u}")
 

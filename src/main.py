@@ -164,7 +164,13 @@ def main(
     eligible_posts = [p for p in eligible_posts if p.post.post_id not in handled]
     # Rank by freshness, spread, demand and media (see selection.py) and keep the top num_posts.
     ranked = rank_posts(eligible_posts)
+    # Every feed post is logged once with its ranking features (numbers only, no text). Joined later with
+    # the public data, this shows which kinds of posts end up with a note people rate helpful.
+    already_seen = ledger.seen_post_ids()
     for p, sc, parts in ranked:
+        if p.post.post_id not in already_seen:
+            ledger.record(p.post.post_id, "seen", score=round(sc, 3), **{k: round(v, 3) for k, v in parts.items()})
+    for p, sc, parts in ranked[: num_posts + 5]:
         print(f"  {p.post.post_id} score={sc:.2f} {parts}")
     eligible_posts = [p for p, _, _ in ranked[:num_posts]]
     if skipped:

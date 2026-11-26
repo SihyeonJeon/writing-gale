@@ -100,6 +100,18 @@ jobs:
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
 
+      # Public Community Notes data: helpful notes to learn from, per-domain outcomes, and which feed
+      # posts ended up with a helpful note. Rebuilt at most once a day; no LLM calls.
+      - name: Refresh benchmark from public data
+        if: steps.switch.outputs.run == 'true'
+        continue-on-error: true
+        run: |
+          if [ -z "$(find data/benchmark/meta.json -mmin -1200 2>/dev/null)" ]; then
+            uv run --with pandas tools/build_benchmark.py
+          else
+            echo "benchmark is fresh: $(cat data/benchmark/meta.json)"
+          fi
+
       # Our own notes' scores, used as style examples. X API only, no LLM calls.
       - name: Refresh note outcomes
         if: steps.switch.outputs.run == 'true'

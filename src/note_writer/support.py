@@ -38,21 +38,44 @@ _NOT_NAMES = {
 _MONTHS = "jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?"
 
 
-def page_text(url: str, timeout: float = 15.0) -> Optional[str]:
-    """Visible text of an HTML page, lower-cased; None if it can't be read."""
-    if url in _page_cache:
-        return _page_cache[url]
-    text: Optional[str] = None
+def _fetch_text(url: str, timeout: float) -> Optional[str]:
     try:
         r = requests.get(url, timeout=timeout, headers={"User-Agent": UA, "Accept": "text/html,*/*"}, stream=True)
         ctype = r.headers.get("Content-Type", "")
+        text = None
         if r.status_code == 200 and ("html" in ctype or "text/plain" in ctype):
             raw = r.raw.read(MAX_BYTES, decode_content=True).decode(r.encoding or "utf-8", errors="replace")
             raw = re.sub(r"(?is)<(script|style|noscript)\b.*?</\1>", " ", raw)
             text = re.sub(r"\s+", " ", html.unescape(re.sub(r"(?s)<[^>]+>", " ", raw))).lower()
         r.close()
+        return text
     except requests.RequestException:
-        text = None
+        return None
+
+
+def archived_copy(url: str, timeout: float = 15.0) -> Optional[str]:
+    """Address of the Internet Archive's latest snapshot of a page, if it has one. Used to read pages
+    that turn automated readers away; the archive serves public copies and asks for no workaround."""
+    try:
+        r = requests.get("https://archive.org/wayback/available", params={"url": url}, timeout=timeout)
+        snap = (r.json().get("archived_snapshots") or {}).get("closest") or {}
+        if snap.get("available") and str(snap.get("status")) == "200":
+            return snap["url"].replace("http://", "https://", 1)
+    except (requests.RequestException, ValueError):
+        pass
+    return None
+
+
+def page_text(url: str, timeout: float = 15.0) -> Optional[str]:
+    """Visible text of an HTML page, lower-cased; None if it can't be read directly or from the archive."""
+    if url in _page_cache:
+        return _page_cache[url]
+    text = _fetch_text(url, timeout)
+    if text is None or len(text) < 500:
+        snap = archived_copy(url)
+        archived = _fetch_text(snap, timeout) if snap else None
+        if archived and len(archived) > len(text or ""):
+            text = archived
     _page_cache[url] = text
     return text
 

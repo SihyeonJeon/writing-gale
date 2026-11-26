@@ -7,6 +7,7 @@ from note_writer.gates import check_note, normalize_note
 from note_writer.llm_util import get_grok_search_json_response
 from note_writer.support import unsupported_specifics
 from note_writer.video import describe_for_prompt, inspect_video
+from benchmark import similar_helpful_notes
 from outcomes import examples_for_prompt
 
 NO_NOTE_NEEDED = "NO NOTE NEEDED"
@@ -177,6 +178,24 @@ Post text:
 
 
 # Each repair round is one more search-enabled LLM call; dashes/prefixes are fixed locally instead.
+# BM25 score above which a helpful note from the public data is about the same story (checked by hand
+# on 50 posts: matches above 30 were the same event, below that mostly unrelated).
+MIN_SIMILAR_SCORE = 30.0
+
+
+def _similar_notes_for_prompt(pwc: PostWithContext) -> str:
+    text = " ".join(p.text for p in [pwc.post, pwc.quoted_post] if p and p.text)
+    hits = [h for h in similar_helpful_notes(text, pwc.post.post_id) if h["score"] >= MIN_SIMILAR_SCORE]
+    if not hits:
+        return ""
+    out = (
+        "\nNotes on OTHER posts that raters marked helpful and whose wording overlaps this post (from the public "
+        "Community Notes data; possibly the same story). Use them as leads for the angle and the kind of source "
+        "raters accepted. Verify every fact yourself and write your own note; they may not apply to this post:\n"
+    )
+    return out + "".join(f"- {h['text'][:400]}\n" for h in hits)
+
+
 MAX_REPAIR_ROUNDS = 1
 # Notes X later bucketed "High" scored above 0 on its evaluate endpoint; Medium and Low were below -1.8.
 MIN_CLAIM_OPINION_SCORE = 0.0
@@ -213,6 +232,7 @@ def research_post_and_write_note(
         video = None
         print(f"video inspection failed for {post_with_context.post.post_id}: {e}")
     post_with_context_description += describe_for_prompt(video)
+    post_with_context_description += _similar_notes_for_prompt(post_with_context)
     images = _image_urls(post_with_context)[:4] + (video.frames if video else [])
 
     note_prompt = _get_prompt_for_note_writing(post_with_context_description, examples_for_prompt())
