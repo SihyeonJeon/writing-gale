@@ -133,6 +133,39 @@ def post_outcome(post_id: str) -> Optional[Tuple[int, bool]]:
     return (v[0], bool(v[1])) if v else None
 
 
+@lru_cache(maxsize=1)
+def _cards() -> Dict:
+    path = DIR / "cards.json"
+    return json.loads(path.read_text()) if path.exists() else {}
+
+
+def cards_for_prompt(has_media: bool, max_cards: int = 10) -> str:
+    """Template cards: the note openings with the highest measured helpful rates, each with real notes
+    that used it. Media posts get the media openings first, other posts the rest."""
+    data = _cards()
+    cards = [c for c in data.get("cards", []) if c.get("examples")]
+    if not cards:
+        return ""
+    cards.sort(key=lambda c: (c["media"] != has_media, -c["helpful"]))
+    base = data["base_helpful"]
+    out = (
+        f"\nTemplate cards, measured on {data['notes']:,} public Community Notes from the last {data['days']} days "
+        f"(average helpful rate {base:.1%}). Each card is how notes with a high helpful rate open, with real notes "
+        "that raters marked helpful. Pick the card that fits this post, keep its form (what it names first, "
+        "how short it is, where the links go), write it in the post's language, and put in your own verified "
+        "facts. Never reuse a card's facts or links.\n"
+    )
+    for c in cards[:max_cards]:
+        out += f'- Opens "{c["opening"]} ...": helpful {c["helpful"]:.1%} of {c["notes"]:,} notes by {c.get("authors", "?")} writers.\n'
+        out += "".join(f"    real note: {e[:300]}\n" for e in c["examples"][:1])
+    avoid = data.get("avoid", [])[:8]
+    if avoid:
+        out += "Openings with below-average helpful rates, do not start a note this way: " + "; ".join(
+            f'"{a["opening"]}" ({a["helpful"]:.1%} of {a["notes"]:,})' for a in avoid
+        ) + "\n"
+    return out
+
+
 def meta() -> Dict:
     path = DIR / "meta.json"
     return json.loads(path.read_text()) if path.exists() else {}

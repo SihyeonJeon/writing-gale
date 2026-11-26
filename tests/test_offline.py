@@ -121,11 +121,20 @@ class Benchmark(unittest.TestCase):
             (Path(d) / "domains.json").write_text(json.dumps({"base": {"notes": 1000, "helpful": 0.1, "not_helpful": 0.02},
                 "domains": {"bad.example": {"notes": 300, "helpful": 0.05, "not_helpful": 0.06}, "ok.example": {"notes": 300, "helpful": 0.1, "not_helpful": 0.02}}}))
             (Path(d) / "posts.json").write_text(json.dumps({"10": [3, 1], "11": [1, 0]}))
+            (Path(d) / "cards.json").write_text(json.dumps({"base_helpful": 0.11, "notes": 1000, "days": 365,
+                "cards": [{"opening": "this is not a", "notes": 500, "authors": 200, "helpful": 0.16, "media": False, "examples": ["This is not a law. https://a.org"]},
+                          {"opening": "this video is ai", "notes": 900, "authors": 300, "helpful": 0.23, "media": True, "examples": ["This video is AI-generated. https://b.org"]}],
+                "avoid": [{"opening": "there is no evidence", "notes": 2000, "authors": 1000, "helpful": 0.07}]}))
             old = b.DIR
             b.DIR = Path(d)
-            for f in (b._index, b._domains, b._posts):
+            for f in (b._index, b._domains, b._posts, b._cards):
                 f.cache_clear()
             try:
+                media_first = b.cards_for_prompt(True)
+                self.assertLess(media_first.index("this video is ai"), media_first.index("this is not a"))
+                text_first = b.cards_for_prompt(False)
+                self.assertLess(text_first.index("this is not a"), text_first.index("this video is ai"))
+                self.assertIn("there is no evidence", text_first)
                 post = "Huge explosion at a fireworks factory in Malta caught on video"
                 self.assertEqual([h["id"] for h in b.similar_helpful_notes(post)], ["1"])
                 self.assertEqual(b.similar_helpful_notes(post, post_id="10"), [])  # never the same post
@@ -135,7 +144,7 @@ class Benchmark(unittest.TestCase):
                 self.assertIsNone(b.post_outcome("99"))
             finally:
                 b.DIR = old
-                for f in (b._index, b._domains, b._posts):
+                for f in (b._index, b._domains, b._posts, b._cards):
                     f.cache_clear()
 
     def test_cjk_tokens(self):

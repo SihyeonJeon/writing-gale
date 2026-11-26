@@ -1,0 +1,7 @@
+[Unit]
+Description=Start a note writer run on GitHub Actions
+
+[Service]
+Type=oneshot
+Environment=WRITER_REPO=OWNER/REPO
+ExecStart=%h/writing-gale-trigger/trigger.sh

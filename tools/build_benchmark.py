@@ -8,6 +8,8 @@ raters actually rated helpful instead of on hand-set rules.
 Writes to data/benchmark/ (gitignored; note text written by other people is not committed):
   domains.json    per cited domain: notes, share rated helpful, share rated not helpful (last 180 days)
   exemplars.jsonl notes rated helpful in the last 60 days: {"id", "post_id", "text"}
+  cards.json      note openings (first words) with their helpful rate over the last 365 days, each with
+                  real helpful notes that use it: what works, measured, to imitate in form
   posts.json      for posts noted in the last 21 days: number of notes and whether any was rated helpful
   meta.json       data date and counts
 
@@ -31,7 +33,57 @@ OUT = Path(__file__).resolve().parent.parent / "data" / "benchmark"
 BASE = "https://ton.twimg.com/birdwatch-public-data/{d:%Y/%m/%d}/{kind}/{kind}-00000.zip"
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 CRH, CRNH = "CURRENTLY_RATED_HELPFUL", "CURRENTLY_RATED_NOT_HELPFUL"
-DOMAIN_DAYS, EXEMPLAR_DAYS, POST_DAYS = 180, 60, 21
+DOMAIN_DAYS, EXEMPLAR_DAYS, POST_DAYS, FRAME_DAYS = 180, 60, 21, 365
+MIN_FRAME_NOTES = 400   # an opening must start at least this many notes to be counted
+MIN_FRAME_AUTHORS = 100  # ... written by at least this many different people (not one writer's habit)
+# Openings about the poster rather than the claim ("this thief account ..."). They rate well, but they
+# accuse a person, which the writer must not do (harassment criterion), so they are not offered as cards.
+ABOUT_POSTER_RE = re.compile(r"account|thief|bait|engagement|scam|grift|farm", re.I)
+CARD_LIFT, AVOID_LIFT = 1.3, 0.8  # cards: helpful rate >= 1.3x average; avoid list: <= 0.8x
+WORD_RE = re.compile(r"[^\W_]+(?:['\u2019][^\W_]+)?", re.UNICODE)
+MEDIA_RE = re.compile(r"video|vídeo|image|imagen|imagem|photo|foto|footage|clip|picture|\bai\b", re.I)
+
+
+NOISY_RE = re.compile("[!\U0001f000-\U0001faff\u2600-\u27bf]|&[a-z]+;")  # not shown as examples
+
+
+def opening(text: str, k: int):
+    """First k words, lower-cased, digits replaced by '#', links removed; None if the note is shorter."""
+    w = WORD_RE.findall(re.sub(r"\d+", "#", URL_RE.sub(" ", text.lower())))[:k]
+    return " ".join(w) if len(w) == k else None
+
+
+def build_cards(year: pd.DataFrame) -> dict:
+    helpful = (year.currentStatus == CRH).values
+    not_helpful = (year.currentStatus == CRNH).values
+    base = float(helpful.mean())
+    stats = {}
+    for k in (3, 4):
+        n, good, bad, examples, authors = Counter(), Counter(), Counter(), {}, {}
+        for text, h, b, t, who in zip(year.summary, helpful, not_helpful, year.t, year.noteAuthorParticipantId):
+            f = opening(text, k)
+            if not f:
+                continue
+            n[f] += 1
+            authors.setdefault(f, set()).add(who)
+            good[f] += h
+            bad[f] += b
+            # keep the newest short helpful notes with a link as real examples of the opening
+            if h and 60 <= len(URL_RE.sub("", text)) <= 240 and URL_RE.search(text) and not NOISY_RE.search(text):
+                examples.setdefault(f, []).append((t, re.sub(r"\s+", " ", text).strip()))
+        for f, c in n.items():
+            if c >= MIN_FRAME_NOTES and len(authors[f]) >= MIN_FRAME_AUTHORS and not ABOUT_POSTER_RE.search(f):
+                stats[f] = {"opening": f, "notes": c, "authors": len(authors[f]), "helpful": round(good[f] / c, 4), "not_helpful": round(bad[f] / c, 4),
+                            "media": bool(MEDIA_RE.search(f)),
+                            "examples": [e for _, e in sorted(examples.get(f, []), reverse=True)[:2]]}
+    # a 4-word opening replaces the 3-word opening it extends, when both qualify
+    keep = [v for f, v in stats.items() if not any(g != f and g.startswith(f + " ") for g in stats)]
+    cards = sorted((v for v in keep if v["helpful"] >= CARD_LIFT * base), key=lambda v: -v["helpful"])
+    avoid = sorted((v for v in keep if v["helpful"] <= AVOID_LIFT * base), key=lambda v: v["helpful"])
+    for v in avoid:
+        v.pop("examples")
+    return {"base_helpful": round(base, 4), "notes": len(year), "days": FRAME_DAYS, "cards": cards, "avoid": avoid}
+
 MIN_DOMAIN_NOTES = 200
 
 
@@ -66,13 +118,15 @@ def main() -> None:
     else:
         notes_src, date = _download("notes")
         status_src, _ = _download("noteStatusHistory")
-    notes = _read(notes_src, ["noteId", "createdAtMillis", "tweetId", "classification", "summary"])
+    notes = _read(notes_src, ["noteId", "noteAuthorParticipantId", "createdAtMillis", "tweetId", "classification", "summary"])
     status = _read(status_src, ["noteId", "currentStatus"])
     notes = notes[notes.classification == "MISINFORMED_OR_POTENTIALLY_MISLEADING"]
     notes["t"] = pd.to_numeric(notes.createdAtMillis, errors="coerce")
     newest = notes.t.max()
-    d = notes[notes.t > newest - DOMAIN_DAYS * 86400e3].merge(status, on="noteId")
-    d["summary"] = d.summary.fillna("")
+    year = notes[notes.t > newest - FRAME_DAYS * 86400e3].merge(status, on="noteId")
+    year["summary"] = year.summary.fillna("")
+    cards = build_cards(year)
+    d = year[year.t > newest - DOMAIN_DAYS * 86400e3]
 
     # domains
     n, good, bad = Counter(), Counter(), Counter()
@@ -95,11 +149,12 @@ def main() -> None:
 
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / "domains.json").write_text(json.dumps({"base": base, "domains": domains}))
+    (OUT / "cards.json").write_text(json.dumps(cards, ensure_ascii=False))
     with (OUT / "exemplars.jsonl").open("w") as f:
         for nid, tid, text in zip(ex.noteId, ex.tweetId, ex.summary):
             f.write(json.dumps({"id": nid, "post_id": tid, "text": re.sub(r"\s+", " ", text).strip()}, ensure_ascii=False) + "\n")
     (OUT / "posts.json").write_text(json.dumps({t: [int(r.notes), int(r.helpful)] for t, r in posts.iterrows()}))
-    meta = {"data_date": date, "built": datetime.now(timezone.utc).isoformat(), "notes": len(d), "domains": len(domains), "exemplars": len(ex), "posts": len(posts), **base}
+    meta = {"data_date": date, "built": datetime.now(timezone.utc).isoformat(), "notes": len(d), "domains": len(domains), "exemplars": len(ex), "posts": len(posts), "cards": len(cards["cards"]), "avoid": len(cards["avoid"]), **base}
     (OUT / "meta.json").write_text(json.dumps(meta))
     print(json.dumps(meta))
 

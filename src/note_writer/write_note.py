@@ -8,7 +8,7 @@ from note_writer.llm_util import get_grok_search_json_response
 from note_writer import reverse_image
 from note_writer.support import unsupported_specifics
 from note_writer.video import describe_for_prompt, inspect_video
-from benchmark import similar_helpful_notes
+from benchmark import cards_for_prompt, similar_helpful_notes
 from outcomes import examples_for_prompt
 
 NO_NOTE_NEEDED = "NO NOTE NEEDED"
@@ -126,14 +126,6 @@ Before writing the note, fill in:
 what an unverified video shows). The note must not depend on any of these. If it would have to, decide \
 "{NOT_ENOUGH_EVIDENCE}".
 
-Notes in the plain style that gets rated helpful (illustrations of form only, not facts to reuse):
-- The photo was taken at a 2017 concert in Manchester, not at this week's rally. It first appeared in a \
-Reuters gallery in May 2017. <url> <url>
-- This image was made with an AI image generator. The creator posted it on Instagram on 3 March with the \
-label "AI art". <url>
-- The quote is from a satire site. The article is labelled as satire on the site's About page. <url> <url>
-- The bill passed the House 218-212 but has not been voted on in the Senate, so it is not law. <url>
-
 If you are not writing a note, set note_text and post_claim to empty strings and evidence, assumptions and \
 misleading_tags to empty lists.
 {examples}
@@ -242,7 +234,10 @@ def research_post_and_write_note(
     post_with_context_description += reverse_image.describe_for_prompt(image_hits)
     images = _image_urls(post_with_context)[:4] + (video.frames if video else [])
 
-    note_prompt = _get_prompt_for_note_writing(post_with_context_description, examples_for_prompt())
+    has_media = any(p.media for p in [post_with_context.post, post_with_context.quoted_post] if p)
+    note_prompt = _get_prompt_for_note_writing(
+        post_with_context_description, cards_for_prompt(has_media) + examples_for_prompt()
+    )
     history: list = []
     last_prompt = note_prompt
     try:
