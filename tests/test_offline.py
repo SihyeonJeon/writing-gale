@@ -173,6 +173,30 @@ class ReverseImage(unittest.TestCase):
         self.assertIsNone(ri.search(_post("photo of a flood", media=True)))
 
 
+class ImageCheck(unittest.TestCase):
+    def test_which_links_need_a_look(self):
+        from note_writer import image_check as ic
+        self.assertTrue(ic.is_official("https://www.army.mil/article/1"))
+        self.assertTrue(ic.is_official("https://science.nasa.gov/x"))
+        self.assertFalse(ic.is_official("https://someblog.example/gov"))
+        urls = ["https://www.army.mil/a", "https://blog.example/orig", "https://matched.example/p/"]
+        verified = ["https://matched.example/p"]
+        self.assertTrue(ic.needs_check("https://blog.example/orig", urls, verified, True))
+        self.assertFalse(ic.needs_check("", urls, verified, True))                       # no source named
+        self.assertFalse(ic.needs_check("https://www.army.mil/a", urls, verified, True))  # official
+        self.assertFalse(ic.needs_check("https://matched.example/p/", urls, verified, True))  # search matched it
+        self.assertFalse(ic.needs_check("https://other.example/x", urls, verified, True))  # not linked in the note
+        self.assertFalse(ic.needs_check("https://blog.example/orig", urls, verified, False))  # post has no image
+        self.assertEqual(ic.check("", urls, verified, "https://pbs.twimg.com/x.jpg"), ([], []))
+
+    def test_meta_image_pattern(self):
+        from note_writer import image_check as ic
+        a = '<meta property="og:image" content="https://a.example/x.jpg">'
+        b = "<meta content='/img/y.png' name='twitter:image'>"
+        self.assertEqual(next(g for g in ic.META_RE.search(a).groups() if g), "https://a.example/x.jpg")
+        self.assertEqual(next(g for g in ic.META_RE.search(b).groups() if g), "/img/y.png")
+
+
 class Selection(unittest.TestCase):
     def test_prefilter(self):
         self.assertTrue(prefilter_reason(_post("lol")))

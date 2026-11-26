@@ -3,9 +3,9 @@ import json
 from cnapi.evaluate_note import claim_opinion_score
 from data_models import MisleadingTag, NoteResult, PostWithContext, ProposedMisleadingNote
 from note_writer.critic import critique
-from note_writer.gates import check_note, normalize_note
+from note_writer.gates import check_note, extract_urls, normalize_note
 from note_writer.llm_util import get_grok_search_json_response
-from note_writer import reverse_image
+from note_writer import image_check, reverse_image
 from note_writer.support import unsupported_specifics
 from note_writer.video import describe_for_prompt, inspect_video
 from benchmark import cards_for_prompt, similar_helpful_notes
@@ -30,13 +30,15 @@ NOTE_RESPONSE_SCHEMA = {
             },
         },
         "assumptions": {"type": "array", "items": {"type": "string"}},
+        # The one cited page said to carry the post's own image or video (its original), if any.
+        "image_source_url": {"type": "string"},
         "note_text": {"type": "string"},
         "misleading_tags": {
             "type": "array",
             "items": {"type": "string", "enum": [tag.value for tag in MisleadingTag]},
         },
     },
-    "required": ["decision", "post_claim", "evidence", "assumptions", "note_text", "misleading_tags"],
+    "required": ["decision", "post_claim", "evidence", "assumptions", "image_source_url", "note_text", "misleading_tags"],
     "additionalProperties": False,
 }
 
@@ -126,7 +128,10 @@ Before writing the note, fill in:
 what an unverified video shows). The note must not depend on any of these. If it would have to, decide \
 "{NOT_ENOUGH_EVIDENCE}".
 
-If you are not writing a note, set note_text and post_claim to empty strings and evidence, assumptions and \
+- image_source_url: if the note says where the post's image or video really comes from, the cited page \
+that carries that same image or video (it will be compared with the post's image). Otherwise an empty string.
+
+If you are not writing a note, set note_text, post_claim and image_source_url to empty strings and evidence, assumptions and \
 misleading_tags to empty lists.
 {examples}
 Post:
@@ -276,6 +281,15 @@ def research_post_and_write_note(
                     "speculation or side facts. State the one sourced fact that answers the post's central claim, "
                     "and if the post makes no checkable claim decide \"" + NO_NOTE_NEEDED + "\""
                 )
+        if not problems:
+            # Last, because it can cost a (search-free) model call: does the cited page show this image?
+            img_problems, img_log = image_check.check(
+                response.get("image_source_url", ""), extract_urls(response["note_text"]),
+                reverse_image.page_urls(image_hits), reverse_image.first_image_url(post_with_context),
+            )
+            for line in img_log:
+                print(f"  {post_with_context.post.post_id}: {line}")
+            problems += img_problems
         if not problems:
             break
         if round_ == MAX_REPAIR_ROUNDS:

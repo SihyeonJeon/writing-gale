@@ -61,6 +61,9 @@ Vision web detection, capped at 30 calls a day and 900 per 30 days).
 5. Deterministic gates: length, URL present and live (a deep link that lands on a front page counts as
    dead), cited pages must come from the search results, banned source types, style. Then the cited pages
    are opened and the note's numbers and names must be on them. One repair round, then give up.
+   If the writer names a cited page as the source of the post's image, and that page is neither official
+   nor one the reverse image search matched, the page's lead image is compared with the post's image by
+   the vision model; a different picture sends the note back.
 6. X's own ClaimOpinion evaluator scores the note (`POST /2/notes/evaluate`, no LLM cost). Below 0, the
    note gets the repair round or is dropped.
 7. Critic pass rates the note as raters from different perspectives would; only clear passes are submitted.
