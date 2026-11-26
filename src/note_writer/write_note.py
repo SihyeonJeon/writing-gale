@@ -1,5 +1,6 @@
 import json
 
+from cnapi.evaluate_note import claim_opinion_score
 from data_models import MisleadingTag, NoteResult, PostWithContext, ProposedMisleadingNote
 from note_writer.critic import critique
 from note_writer.gates import check_note, normalize_note
@@ -177,6 +178,8 @@ Post text:
 
 # Each repair round is one more search-enabled LLM call; dashes/prefixes are fixed locally instead.
 MAX_REPAIR_ROUNDS = 1
+# Notes X later bucketed "High" scored above 0 on its evaluate endpoint; Medium and Low were below -1.8.
+MIN_CLAIM_OPINION_SCORE = 0.0
 
 
 def _repair_prompt(problems: list[str]) -> str:
@@ -239,6 +242,16 @@ def research_post_and_write_note(
                 problems.append(
                     "these names/numbers in the note are not on the pages it cites: " + ", ".join(missing[:8])
                     + ". Use the sources' own figures and names, cite the page that states them, or drop them"
+                )
+        if not problems:
+            # Free pre-check with X's own evaluator, before paying for the critic call.
+            score = claim_opinion_score(response["note_text"], post_with_context.post.post_id)
+            if score is not None and score < MIN_CLAIM_OPINION_SCORE:
+                problems.append(
+                    f"X's ClaimOpinion evaluator scored this note {score:.2f} (needs {MIN_CLAIM_OPINION_SCORE:.1f} or more). "
+                    "It scores low when a note does not directly address a claim the post makes, or adds opinion, "
+                    "speculation or side facts. State the one sourced fact that answers the post's central claim, "
+                    "and if the post makes no checkable claim decide \"" + NO_NOTE_NEEDED + "\""
                 )
         if not problems:
             break

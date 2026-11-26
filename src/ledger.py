@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Set
 _lock = threading.Lock()
 
 # Decisions that mean "don't look at this post again". Errors are retried on later runs.
-FINAL_DECISIONS = {"prefilter_skip", "critic_skip", "submitted", "duplicate", "NO NOTE NEEDED", "NOT ENOUGH EVIDENCE", "gate_failed", "dry_run"}
+FINAL_DECISIONS = {"prefilter_skip", "evaluator_skip", "critic_skip", "submitted", "duplicate", "NO NOTE NEEDED", "NOT ENOUGH EVIDENCE", "gate_failed", "dry_run"}
 
 
 def ledger_path() -> Path:

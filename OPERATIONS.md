@@ -1,6 +1,11 @@
 # Running the writer
 
-The writer runs on GitHub Actions every 30 minutes (`.github/workflows/community_note_writer.yaml`).
+The writer runs on GitHub Actions (`.github/workflows/community_note_writer.yaml`), every 30 minutes.
+
+GitHub's own `schedule` trigger proved unreliable (3 runs in 19 hours for a `7,37 * * * *` cron), so an
+outside timer starts the workflow through the `workflow_dispatch` API every 30 minutes; the cron stays as a
+fallback. Any always-on machine works: one `curl -X POST .../actions/workflows/community_note_writer.yaml/dispatches`
+with a token that has Actions write access to this repo only.
 
 ## Switch
 
@@ -48,7 +53,9 @@ requires a fully automated writer.
 5. Deterministic gates: length, URL present and live (a deep link that lands on a front page counts as
    dead), cited pages must come from the search results, banned source types, style. Then the cited pages
    are opened and the note's numbers and names must be on them. One repair round, then give up.
-6. Critic pass rates the note as raters from different perspectives would; only clear passes are submitted.
+6. X's own ClaimOpinion evaluator scores the note (`POST /2/notes/evaluate`, no LLM cost). Below 0, the
+   note gets the repair round or is dropped.
+7. Critic pass rates the note as raters from different perspectives would; only clear passes are submitted.
 
 GitHub disables scheduled workflows in public repos after 60 days without commits; push something
 before that.

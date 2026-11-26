@@ -76,6 +76,8 @@ def _worker(
         ledger.record(post_id, note_result.refusal, test_mode=test_mode)
     elif note_result.error:
         decision = "gate_failed" if note_result.error.startswith("GATE_FAILED") else "error"
+        if "ClaimOpinion evaluator scored" in note_result.error:
+            decision = "evaluator_skip"
         ledger.record(post_id, decision, error=note_result.error[:2000], test_mode=test_mode)
     elif note_result.note is not None and dry_run:
         ledger.record(post_id, "dry_run", note_text=note_text, misleading_tags=tags, gate_warnings=note_result.gate_warnings, test_mode=test_mode)
