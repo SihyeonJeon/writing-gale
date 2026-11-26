@@ -215,6 +215,14 @@ class Selection(unittest.TestCase):
         ranked = rank_posts([_post("old claim here", 30, likes=90000, pid="old"), _post("new claim here", 1, likes=6900, pid="new")])
         self.assertEqual(ranked[0][0].post.post_id, "new")
 
+    def test_rank_prefers_new_in_feed(self):
+        from datetime import datetime, timedelta, timezone
+        posts = [_post("same claim here", 8, likes=500, pid="a"), _post("same claim here", 8, likes=500, pid="b")]
+        long_ago = datetime.now(timezone.utc) - timedelta(hours=6)
+        ranked = rank_posts(posts, first_seen={"a": long_ago})
+        self.assertEqual(ranked[0][0].post.post_id, "b")
+        self.assertAlmostEqual(ranked[0][1] / ranked[1][1], 2.0, delta=0.05)
+
 
 class Ledger(unittest.TestCase):
     def test_daily_count_and_handled(self):

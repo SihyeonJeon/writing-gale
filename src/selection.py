@@ -24,6 +24,10 @@ from typing import Dict, List, Tuple
 from data_models import PostWithContext
 
 FRESH_HALF_LIFE_H = 6.0
+# Posts reach the eligible feed hours after they were posted (measured 2026-11-26: youngest 5h, median
+# 15h), so post age separates them poorly. What we control is how soon we act once a post shows up:
+# a post new to our feed counts double, fading to no boost with a 1-hour half-life. A first guess.
+ARRIVAL_HALF_LIFE_H = 1.0
 MEDIA_BOOST = 1.5
 
 # Topic multipliers from public-data CRH rates of notes mentioning each topic (base ~11.4%):
@@ -90,9 +94,13 @@ def _age_hours(pwc: PostWithContext, now: datetime) -> float:
     return max(0.0, (now - pwc.post.created_at).total_seconds() / 3600)
 
 
-def score_post(pwc: PostWithContext, now: datetime | None = None) -> Tuple[float, Dict[str, float]]:
+def score_post(
+    pwc: PostWithContext, now: datetime | None = None, first_seen: datetime | None = None
+) -> Tuple[float, Dict[str, float]]:
+    """`first_seen` is when the post first appeared in our feed; None means it is new right now."""
     now = now or datetime.now(timezone.utc)
     age = _age_hours(pwc, now)
+    in_feed_h = max(0.0, (now - first_seen).total_seconds() / 3600) if first_seen else 0.0
     m = pwc.post.public_metrics or {}
     engagement = (
         m.get("like_count", 0)
@@ -114,24 +122,28 @@ def score_post(pwc: PostWithContext, now: datetime | None = None) -> Tuple[float
         "topic": topic_weight(" ".join(t for t in [pwc.post.text, pwc.quoted_post.text if pwc.quoted_post else ""] if t)),
     }
     parts["checkable"] = checkable_weight(pwc)
+    parts["arrival"] = 1 + 0.5 ** (in_feed_h / ARRIVAL_HALF_LIFE_H)
     # Note requests weigh more than raw spread: a viral opinion or anecdote gets no note, while a post
     # people asked to have checked usually has something checkable in it.
     score = (
-        parts["topic"] * parts["media"] * parts["fresh"] * parts["checkable"]
+        parts["topic"] * parts["media"] * parts["fresh"] * parts["checkable"] * parts["arrival"]
         * (1 + 0.5 * parts["spread"] + 1.0 * parts["demand"])
     )
     parts["age_h"] = round(age, 2)
+    parts["in_feed_h"] = round(in_feed_h, 2)
     parts["velocity"] = round(velocity, 1)
     return score, parts
 
 
-def rank_posts(posts: List[PostWithContext], skip_sensitive: bool = True) -> List[Tuple[PostWithContext, float, Dict[str, float]]]:
+def rank_posts(
+    posts: List[PostWithContext], skip_sensitive: bool = True, first_seen: Dict[str, datetime] | None = None
+) -> List[Tuple[PostWithContext, float, Dict[str, float]]]:
     now = datetime.now(timezone.utc)
     ranked = []
     for p in posts:
         if skip_sensitive and p.post.possibly_sensitive:
             continue
-        s, parts = score_post(p, now)
+        s, parts = score_post(p, now, (first_seen or {}).get(str(p.post.post_id)))
         ranked.append((p, s, parts))
     ranked.sort(key=lambda t: t[1], reverse=True)
     return ranked

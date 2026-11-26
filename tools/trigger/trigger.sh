@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Starts one run of the note writer workflow on GitHub Actions. Run it from any always-on machine
-# every 30 minutes (see the systemd units next to this file); GitHub's own schedule trigger skipped
+# every 5 minutes (see the systemd units next to this file); GitHub's own schedule trigger skipped
 # most runs. The workflow's WRITER_MODE switch still decides whether a run does anything.
 #
 # Needs a fine-grained GitHub token with "Actions: read and write" on this one repository, stored

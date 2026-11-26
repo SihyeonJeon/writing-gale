@@ -1,9 +1,9 @@
 [Unit]
-Description=Start the note writer every 30 minutes
+Description=Start the note writer every 5 minutes
 
 [Timer]
-OnCalendar=*:07,37
-RandomizedDelaySec=20
+OnCalendar=*:02/5
+RandomizedDelaySec=10
 
 [Install]
 WantedBy=timers.target

@@ -119,6 +119,7 @@ def main(
     max_usd: float = 0.0,
     daily_cap: int = 0,
     daily_usd: float = 0.0,
+    hourly_usd: float = 0.0,
 ):
     """
     Get up to `num_posts` recent posts eligible for notes and write notes for them.
@@ -126,28 +127,39 @@ def main(
     `max_usd` stops starting new posts once this run's xAI spend reaches it (0 = no limit).
     `daily_cap` stops once this many notes were submitted in the last 24h (0 = no limit).
     `daily_usd` caps xAI spend over the last 24h across runs (0 = no limit).
+    `hourly_usd` caps xAI spend over the last hour, so frequent runs spread the daily budget over the
+    day instead of using it up in a few hours (0 = no limit).
     """
+    # A reached limit stops research, not the feed read: the feed is still fetched and logged (no LLM
+    # cost) so we keep knowing when each post first appeared.
+    pause = ""
+    if hourly_usd:
+        spent_1h = ledger.usd_last_hours(1)
+        print(f"Hourly budget ${hourly_usd:.2f}: ${spent_1h:.2f} spent in the last hour")
+        if spent_1h >= hourly_usd:
+            pause = "hourly budget reached"
     if daily_usd:
         spent = ledger.usd_last_24h()
         print(f"Daily budget ${daily_usd:.2f}: ${spent:.2f} spent in the last 24h")
         if spent >= daily_usd:
-            ledger.record("-", "run_summary", processed=0, reason="daily budget reached", test_mode=test_mode)
-            return
-        max_usd = min(max_usd, daily_usd - spent) if max_usd else daily_usd - spent
+            pause = "daily budget reached"
+        else:
+            max_usd = min(max_usd, daily_usd - spent) if max_usd else daily_usd - spent
     if daily_cap and not dry_run:
         done_24h = ledger.submitted_last_24h(test_mode=test_mode)
         remaining = daily_cap - done_24h
         print(f"Daily cap {daily_cap}: {done_24h} submitted in the last 24h, {max(remaining, 0)} left")
         if remaining <= 0:
-            ledger.record("-", "run_summary", processed=0, reason="daily cap reached", test_mode=test_mode)
-            return
+            pause = "daily cap reached"
         # Most researched posts end without a note, so research a few more than the notes left.
-        num_posts = min(num_posts, remaining * 3)
+        num_posts = min(num_posts, max(remaining, 0) * 3)
+    if pause:
+        num_posts = 0
 
     print(f"Getting up to {num_posts} recent posts eligible for notes (test_mode={test_mode})")
     try:
         eligible_posts: List[PostWithContext] = get_posts_eligible_for_notes(
-            max_results=max(fetch, num_posts), test_mode=test_mode
+            max_results=max(fetch, num_posts, 1), test_mode=test_mode
         )
     except subprocess.CalledProcessError as e:
         sys.exit(
@@ -163,7 +175,7 @@ def main(
     skipped = [p for p in eligible_posts if p.post.post_id in handled]
     eligible_posts = [p for p in eligible_posts if p.post.post_id not in handled]
     # Rank by freshness, spread, demand and media (see selection.py) and keep the top num_posts.
-    ranked = rank_posts(eligible_posts)
+    ranked = rank_posts(eligible_posts, first_seen=ledger.first_seen())
     # Every feed post is logged once with its ranking features (numbers only, no text). Joined later with
     # the public data, this shows which kinds of posts end up with a note people rate helpful.
     already_seen = ledger.seen_post_ids()
@@ -178,6 +190,10 @@ def main(
     print(
         f"  Eligible Post IDs: {', '.join([str(post_with_context.post.post_id) for post_with_context in eligible_posts])}\n"
     )
+    if pause:
+        print(f"Not researching this run: {pause}.")
+        ledger.record("-", "run_summary", processed=0, reason=pause, test_mode=test_mode)
+        return
     if len(eligible_posts) == 0:
         print("No posts to process.")
         ledger.record("-", "run_summary", processed=0, test_mode=test_mode)
@@ -233,6 +249,10 @@ if __name__ == "__main__":
         help="Stop once this many notes were submitted in the last 24h (0 = no limit)",
     )
     parser.add_argument(
+        "--hourly-usd", type=float, default=float(os.getenv("HOURLY_USD_CAP") or 0),
+        help="Cap xAI spend over the last hour across runs (0 = no limit)",
+    )
+    parser.add_argument(
         "--daily-usd", type=float, default=float(os.getenv("DAILY_USD_CAP") or 0),
         help="Cap xAI spend over the last 24h across runs (0 = no limit)",
     )
@@ -247,4 +267,5 @@ if __name__ == "__main__":
         max_usd=args.max_usd,
         daily_cap=args.daily_cap,
         daily_usd=args.daily_usd,
+        hourly_usd=args.hourly_usd,
     )

@@ -87,6 +87,23 @@ def usd_last_24h() -> float:
     return sum(float(r.get("llm_usd") or 0) for r in records_since(24) if r.get("decision") == "run_summary")
 
 
+def usd_last_hours(hours: float) -> float:
+    """xAI spend over the last `hours`, from the per-run summaries."""
+    return sum(float(r.get("llm_usd") or 0) for r in records_since(hours) if r.get("decision") == "run_summary")
+
+
+def first_seen() -> Dict[str, datetime]:
+    """When each post first showed up in our feed (the time of its `seen` record)."""
+    out: Dict[str, datetime] = {}
+    for rec in all_records():
+        if rec.get("decision") == "seen":
+            try:
+                out.setdefault(str(rec.get("post_id")), datetime.fromisoformat(rec["ts"]))
+            except (KeyError, ValueError):
+                continue
+    return out
+
+
 def seen_post_ids() -> Set[str]:
     path = ledger_path()
     if not path.exists():
