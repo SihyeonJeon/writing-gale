@@ -5,6 +5,7 @@ from data_models import MisleadingTag, NoteResult, PostWithContext, ProposedMisl
 from note_writer.critic import critique
 from note_writer.gates import check_note, normalize_note
 from note_writer.llm_util import get_grok_search_json_response
+from note_writer import reverse_image
 from note_writer.support import unsupported_specifics
 from note_writer.video import describe_for_prompt, inspect_video
 from benchmark import similar_helpful_notes
@@ -233,6 +234,12 @@ def research_post_and_write_note(
         print(f"video inspection failed for {post_with_context.post.post_id}: {e}")
     post_with_context_description += describe_for_prompt(video)
     post_with_context_description += _similar_notes_for_prompt(post_with_context)
+    try:
+        image_hits = reverse_image.search(post_with_context)
+    except Exception as e:  # a lead-finding extra must never cost us the post
+        image_hits = None
+        print(f"reverse image search failed for {post_with_context.post.post_id}: {e}")
+    post_with_context_description += reverse_image.describe_for_prompt(image_hits)
     images = _image_urls(post_with_context)[:4] + (video.frames if video else [])
 
     note_prompt = _get_prompt_for_note_writing(post_with_context_description, examples_for_prompt())
@@ -242,7 +249,8 @@ def research_post_and_write_note(
         response = get_grok_search_json_response(note_prompt, NOTE_RESPONSE_SCHEMA, image_urls=images)
     except Exception as e:
         return NoteResult(post=post_with_context, error=str(e), context_description=post_with_context_description)
-    seen_urls: list[str] = list(response.pop("_cited_urls", []))
+    # Pages the model was shown count as pages it found.
+    seen_urls: list[str] = list(response.pop("_cited_urls", [])) + reverse_image.page_urls(image_hits)
 
     gate = None
     for round_ in range(MAX_REPAIR_ROUNDS + 1):

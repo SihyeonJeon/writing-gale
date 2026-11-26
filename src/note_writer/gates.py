@@ -28,6 +28,16 @@ OPINION_RE = re.compile(
     r"uncorroborated|baseless|debunked|hoax|conspiracy theor(?:y|ies)|so-called)\b",
     re.IGNORECASE,
 )
+# Stock phrases and hype words that read as machine- or ad-written. In the public notes data (474k notes,
+# 180 days) notes with hype words were rated helpful 9.0% of the time vs 10.3% overall and Not Helpful
+# 3.4% vs 1.9%; notes opening with a filler word ("So", "Well", "OK") 0% of 56. The stock phrases are too
+# rare in notes to measure and are barred as plain hygiene.
+STOCK_RE = re.compile(
+    r"\bdelve\b|\bin conclusion\b|\bin this article\b|\blet'?s (?:dive|explore)\b|\blook no further\b|"
+    r"\bgame[- ]changer\b|\bmind[- ]blowing\b|\bunreal\b|\bobsessed\b|\bit'?s (?:amazing|incredible)\b",
+    re.IGNORECASE,
+)
+OPENER_RE = re.compile(r"^\s*(?:ok|okay|alright|so|well|right|um|like|wait)\b[ ,]", re.IGNORECASE)
 PREFIX_RE = re.compile(r"^\s*(community note|note|context)\s*:", re.IGNORECASE)
 
 MAX_CHARS = 280
@@ -136,6 +146,7 @@ def normalize_note(text: str) -> str:
         part = re.sub(r"\s*[\u2014\u2013]\s*", ", ", part)
         body.append(part)
     prose = re.sub(r"\s+", " ", "".join(body))
+    prose = re.sub(r"!+", ".", prose)  # notes with "!" are rated helpful 7.1% vs 10.3% overall
     prose = re.sub(r"\s+([.,;:!?])", r"\1", prose)
     prose = re.sub(r"([.!?])[.,;:]+", r"\1", prose)  # "sentence. ." left where a link was lifted out
     prose = PREFIX_RE.sub("", prose).strip(" ,;:")
@@ -191,6 +202,11 @@ def check_note(text: str, check_urls: bool = True, seen_urls: Optional[List[str]
         problems.append("note uses an em/en dash; use a period or comma (dashes read as machine-written and score slightly lower)")
     if re.search(r"\?\s*(?:yes|no)\b", body, re.IGNORECASE):
         problems.append("note asks a question and answers it; state the fact directly")
+    m = STOCK_RE.search(body)
+    if m:
+        problems.append(f'note uses a stock or hype phrase: "{m.group(0)}"; say it plainly')
+    if OPENER_RE.search(body):
+        problems.append("note opens with a filler word; start with the fact")
     m = OPINION_RE.search(body)
     if m:
         problems.append(f'note contains opinion/hedging wording: "{m.group(0)}"')

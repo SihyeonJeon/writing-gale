@@ -78,6 +78,9 @@ class Gates(unittest.TestCase):
         self.assertFalse(check_note("No source here", check_urls=False).ok)
         self.assertFalse(check_note("Obviously false https://x.org", check_urls=False).ok)
         self.assertFalse(check_note("See https://grok.com/share/abc", check_urls=False).ok)
+        self.assertFalse(check_note("So, the photo is from 2019. https://a.org/b", check_urls=False).ok)
+        self.assertFalse(check_note("The clip is a game-changer for the case. https://a.org/b", check_urls=False).ok)
+        self.assertEqual(normalize_note("The photo is from 2019! https://a.org/b"), "The photo is from 2019.\n\nhttps://a.org/b")
 
 
 class Support(unittest.TestCase):
@@ -138,6 +141,27 @@ class Benchmark(unittest.TestCase):
     def test_cjk_tokens(self):
         import benchmark as b
         self.assertIn("地震", b.tokens("東京で地震があった"))
+
+
+class ReverseImage(unittest.TestCase):
+    def test_summarise_and_describe(self):
+        from note_writer import reverse_image as ri
+        web = {"bestGuessLabels": [{"label": "venice flood 2019"}], "webEntities": [{"description": "Venice"}, {"score": 1}],
+               "pagesWithMatchingImages": [
+                   {"url": "https://b.example/crop", "pageTitle": "Crop", "partialMatchingImages": [{"url": "x"}]},
+                   {"url": "https://a.example/orig", "pageTitle": "Acqua alta", "fullMatchingImages": [{"url": "y"}]}]}
+        found = ri.summarise(web)
+        self.assertEqual(found["pages"][0]["url"], "https://a.example/orig")  # full matches first
+        text = ri.describe_for_prompt(found)
+        self.assertIn("venice flood 2019", text)
+        self.assertIn("Same image on: https://a.example/orig", text)
+        self.assertEqual(ri.describe_for_prompt(None), "")
+        self.assertEqual(ri.page_urls(found), ["https://a.example/orig", "https://b.example/crop"])
+
+    def test_no_key_no_call(self):
+        from note_writer import reverse_image as ri
+        os.environ.pop("GOOGLE_VISION_API_KEY", None)
+        self.assertIsNone(ri.search(_post("photo of a flood", media=True)))
 
 
 class Selection(unittest.TestCase):
