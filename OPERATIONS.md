@@ -36,6 +36,9 @@ requires a fully automated writer.
 
 `X_API_KEY`, `X_API_KEY_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`, `XAI_API_KEY`.
 
+Optional: `GOOGLE_VISION_API_KEY` turns on reverse image search for posts with an image (Google Cloud
+Vision web detection, capped at 30 calls a day and 900 per 30 days).
+
 ## Monitoring
 
 - Each run's summary page shows counts, spend and admission progress (no post text).
