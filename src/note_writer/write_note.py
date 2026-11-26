@@ -240,8 +240,17 @@ def research_post_and_write_note(
     images = _image_urls(post_with_context)[:4] + (video.frames if video else [])
 
     has_media = any(p.media for p in [post_with_context.post, post_with_context.quoted_post] if p)
+    cards = cards_for_prompt(has_media)
+    # One line per post saying what the model was given, so a run's log shows which tools took part.
+    print(
+        f"  {post_with_context.post.post_id}: inputs images={len(images)}"
+        f" video={'none' if video is None else video.status + ('+transcript' if video.transcript else '')}"
+        f" image_search_pages={len(reverse_image.page_urls(image_hits))}"
+        f" similar_notes={post_with_context_description.count('Notes on OTHER posts')}"
+        f" cards={'yes' if cards else 'no'}"
+    )
     note_prompt = _get_prompt_for_note_writing(
-        post_with_context_description, cards_for_prompt(has_media) + examples_for_prompt()
+        post_with_context_description, cards + examples_for_prompt()
     )
     history: list = []
     last_prompt = note_prompt
