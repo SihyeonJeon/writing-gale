@@ -286,3 +286,36 @@ class Prompts(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestNoteTarget(unittest.TestCase):
+    def test_target_stops_before_research(self):
+        from unittest.mock import patch
+        import main
+        notes = [{"id": str(i)} for i in range(50)]
+        with patch.dict(os.environ, {"TEST_NOTE_TARGET": "50"}), \
+             patch("main.outcomes.refresh", return_value=notes), \
+             patch("main.ledger.all_records", return_value=[]), \
+             patch("main.ledger.record"), \
+             patch("main.get_posts_eligible_for_notes") as feed:
+            main.main(test_mode=True)
+            feed.assert_not_called()
+
+    def test_target_limits_batch_and_includes_unlisted_submissions(self):
+        from unittest.mock import patch
+        import main
+        notes = [{"id": str(i)} for i in range(48)]
+        records = [{"decision": "submitted", "note_id": "48", "test_mode": True}]
+        posts = [_post("Official results announced", pid=str(i)) for i in range(4)]
+        with patch.dict(os.environ, {"TEST_NOTE_TARGET": "50"}), \
+             patch("main.outcomes.refresh", return_value=notes), \
+             patch("main.ledger.all_records", return_value=records), \
+             patch("main.ledger.handled_post_ids", return_value=set()), \
+             patch("main.ledger.first_seen", return_value={}), \
+             patch("main.ledger.seen_post_ids", return_value=set()), \
+             patch("main.ledger.submitted_last_24h", return_value=0), \
+             patch("main.ledger.record"), \
+             patch("main.get_posts_eligible_for_notes", return_value=posts), \
+             patch("main._worker") as worker:
+            main.main(num_posts=10, concurrency=4, test_mode=True)
+            self.assertEqual(worker.call_count, 1)

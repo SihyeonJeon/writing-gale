@@ -37,6 +37,10 @@ def _fetch(test_mode: bool) -> List[Dict]:
         if token:
             path += f"&pagination_token={token}"
         resp = run_xurl(["xurl", path])
+        if resp.get("errors") or not isinstance(resp.get("data", []), list):
+            raise RuntimeError("Cannot verify submitted notes from X; research paused")
+        if "data" not in resp and "meta" not in resp:
+            raise RuntimeError("X returned no verifiable note list; research paused")
         for n in resp.get("data", []):
             n["test_mode"] = test_mode
             notes.append(n)

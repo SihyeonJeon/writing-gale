@@ -12,6 +12,7 @@ from cnapi.submit_note import submit_note
 from data_models import NoteResult, Post, PostWithContext
 import dotenv
 import ledger
+import outcomes
 from selection import rank_posts
 from note_writer.llm_util import USAGE
 from note_writer.write_note import research_post_and_write_note
@@ -130,6 +131,24 @@ def main(
     `hourly_usd` caps xAI spend over the last hour, so frequent runs spread the daily budget over the
     day instead of using it up in a few hours (0 = no limit).
     """
+    test_target = int(os.getenv("TEST_NOTE_TARGET") or 0)
+    if test_mode and test_target and not dry_run:
+        # Refresh from X before spending, and include local submissions while X catches up.
+        notes = outcomes.refresh(include_live=False)
+        submitted_ids = {str(n["id"]) for n in notes}
+        submitted_ids.update(
+            str(r["note_id"]) for r in ledger.all_records()
+            if r.get("decision") == "submitted" and r.get("test_mode", True) and r.get("note_id")
+        )
+        remaining_target = max(test_target - len(submitted_ids), 0)
+        print(f"Test note target {test_target}: {len(submitted_ids)} submitted, {remaining_target} left")
+        if not remaining_target:
+            ledger.record("-", "run_summary", processed=0, reason="test note target reached", test_mode=True)
+            print("Test note target reached. Waiting for admission review.")
+            return
+        num_posts = min(num_posts, remaining_target)
+        concurrency = 1
+
     # A reached limit stops research, not the feed read: the feed is still fetched and logged (no LLM
     # cost) so we keep knowing when each post first appeared.
     pause = ""
