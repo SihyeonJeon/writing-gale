@@ -38,6 +38,8 @@ class EvidenceQuotes(unittest.TestCase):
         self.assertIsNotNone(result.note)
         self.assertIn('2020', result.note.note_text)
         self.assertIn('The blackout was staged.', model.call_args_list[1].args[0])
+        self.assertIn('Start a fresh draft', model.call_args_list[1].args[0])
+        self.assertNotIn('history', model.call_args_list[1].kwargs)
         self.assertEqual(len([t for t in result.validation_trace if t['stage'] == 'critic']), 2)
 
     def test_source_excerpt_reaches_article_beyond_navigation(self):

@@ -290,8 +290,6 @@ def research_post_and_write_note(
     )
     trace.append({"stage": "input", "prompt_sha256": hashlib.sha256(note_prompt.encode()).hexdigest(),
                   "images": len(images), "video_status": video.status if video else None})
-    history: list = []
-    last_prompt = note_prompt
     try:
         response = get_grok_search_json_response(note_prompt, NOTE_RESPONSE_SCHEMA, image_urls=images)
     except Exception as e:
@@ -383,16 +381,14 @@ def research_post_and_write_note(
                 error="GATE_FAILED: " + "; ".join(problems) + f" | last note: {response['note_text']}",
                 context_description=post_with_context_description,
             )
-        history += [
-            {"role": "user", "content": last_prompt},
-            {"role": "assistant", "content": json.dumps(response)},
-        ]
-        last_prompt = _repair_prompt(problems) + _source_context(
+        # Rebuild from the original task and checked pages. Replaying the rejected assistant
+        # ledger makes its unsupported claims and invented quotations input to the next draft.
+        repair_input = note_prompt + "\nStart a fresh draft from the original post and checked evidence.\n" + _repair_prompt(problems) + _source_context(
             extract_urls(response["note_text"]) + seen_urls,
             response.get("post_claim", "") + " " + response["note_text"],
         )
         try:
-            response = get_grok_search_json_response(last_prompt, NOTE_RESPONSE_SCHEMA, history=history)
+            response = get_grok_search_json_response(repair_input, NOTE_RESPONSE_SCHEMA)
         except Exception as e:
             return finish(post=post_with_context, error=str(e), context_description=post_with_context_description)
         seen_urls += response.pop("_cited_urls", [])

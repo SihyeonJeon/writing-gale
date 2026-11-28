@@ -100,6 +100,8 @@ The preview runs source checks, X's evaluation endpoint and the critic. It limit
 to six tool calls and 4,000 output tokens, uses no retries, and stops starting calls with $0.20 remaining
 in the requested preview budget. Inspect the saved drafts and verification trace, update general
 inputs, and run the same cached cases again. Preview results do not enter the submission ledger.
+Repair input is rebuilt from the original task, measured failures and checked source passages; the
+rejected assistant draft and its evidence ledger are not replayed as conversation history.
 
 Contest submissions continue to use the assigned contest feed. Author observations can inform
 prioritization within that feed; following an author's account does not add its posts to that feed.
