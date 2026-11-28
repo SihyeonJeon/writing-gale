@@ -1,19 +1,8 @@
-"""
-Rank eligible posts so the limited daily note quota goes where a note is most likely to reach
-Currently Rated Helpful (CRH).
+"""Rank eligible candidates using recorded freshness, spread, requests and content features.
 
-Signals, from the public Community Notes data (2025-06 .. 2026-11, ~900k English notes):
-- freshness: notes written within ~1h of the first note on a post reach CRH ~20% of the time,
-  vs ~4% after a day. Older posts are worth much less.
-- media: media notes reach CRH ~17% vs ~11% overall (recycled / AI-generated / edited media is
-  checkable and raters agree on it).
-- demand: posts that several people write notes on reach CRH 2-3x as often as single-note posts.
-  We can't see other notes in real time, so the number of note requests / suggested sources is
-  used as a stand-in.
-- spread: engagement per hour (likes, reposts, quotes, replies) - a note on a post that is still
-  spreading gets seen and rated.
-
-The weights are a starting guess and should be re-fit against our own CRH outcomes.
+Spread uses measured engagement changes between recent feed observations, with a lifetime-rate
+fallback on first observation. Impression changes are logged separately. Existing topic, media and
+checkability weights remain heuristic; author follower count is not a ranking multiplier.
 """
 
 import math
@@ -37,8 +26,7 @@ TOPIC_WEIGHTS = [
     (re.compile(r"\bIsrael|\bGaza|\bPalestin|\bHamas\b|\bZionis|\bIDF\b", re.I), 0.6),
     (re.compile(r"\belection|\bballot|\bvoter fraud|\brigged\b", re.I), 0.6),
     (re.compile(r"\bimmigra|\bmigrant|\bdeport|\billegals?\b", re.I), 0.7),
-    # Historical atrocities: notes here read as denial unless they fix a concrete detail; first test
-    # note on such a post scored ClaimOpinion low.
+    # Existing topic coefficient; retained while growth measurements accumulate.
     (re.compile(r"\bgenocid|\bmassacre|\bholocaust|\bslavery\b|\bcoloni[sz]|\bwar crimes?\b|\bethnic cleansing", re.I), 0.5),
 ]
 
@@ -95,7 +83,8 @@ def _age_hours(pwc: PostWithContext, now: datetime) -> float:
 
 
 def score_post(
-    pwc: PostWithContext, now: datetime | None = None, first_seen: datetime | None = None
+    pwc: PostWithContext, now: datetime | None = None, first_seen: datetime | None = None,
+    previous_observation: dict | None = None,
 ) -> Tuple[float, Dict[str, float]]:
     """`first_seen` is when the post first appeared in our feed; None means it is new right now."""
     now = now or datetime.now(timezone.utc)
@@ -109,6 +98,11 @@ def score_post(
         + m.get("reply_count", 0)
     )
     velocity = engagement / max(age, 0.5)
+    growth = recent_growth(m, previous_observation, now)
+    if growth:
+        # Preserve the existing engagement weights, using the observed interval instead of
+        # diluting a new burst over the post's entire age.
+        velocity = growth["recent_engagement_per_h"]
     has_media = bool(pwc.post.media) or bool(pwc.quoted_post and pwc.quoted_post.media)
     requests = len(pwc.note_request_suggestions) + sum(
         int(link.get("count", 1) or 1) for link in pwc.suggested_source_links_with_counts
@@ -132,18 +126,48 @@ def score_post(
     parts["age_h"] = round(age, 2)
     parts["in_feed_h"] = round(in_feed_h, 2)
     parts["velocity"] = round(velocity, 1)
+    parts["recent_velocity_used"] = float(bool(growth))
+    parts.update(growth)
     return score, parts
 
 
+def recent_growth(metrics: dict, previous: dict | None, now: datetime) -> Dict[str, float]:
+    """Measure changes across 1–60 minutes. Missing/reset counters are not zero growth."""
+    if not previous:
+        return {}
+    try:
+        elapsed = (now - datetime.fromisoformat(previous["ts"])).total_seconds()
+    except (KeyError, ValueError, TypeError):
+        return {}
+    if not 60 <= elapsed <= 3600:
+        return {}
+    old = previous.get("post_public_metrics") or {}
+    weights = {"like_count": 1, "retweet_count": 2, "quote_count": 2, "reply_count": 1}
+    # Keep the same set of counters in both snapshots and the lifetime fallback.
+    if any(k not in old or k not in metrics for k in weights):
+        return {}
+    if any(metrics[k] < old[k] for k in weights):
+        return {}
+    hours = elapsed / 3600
+    growth = {"growth_window_s": elapsed}
+    for key in [*weights, "impression_count"]:
+        if key in old and key in metrics and metrics[key] >= old[key]:
+            growth["recent_" + key.removesuffix("_count") + "_per_h"] = (metrics[key] - old[key]) / hours
+    growth["recent_engagement_per_h"] = sum(weights[k] * (metrics[k] - old[k]) for k in weights) / hours
+    return growth
+
+
 def rank_posts(
-    posts: List[PostWithContext], skip_sensitive: bool = True, first_seen: Dict[str, datetime] | None = None
+    posts: List[PostWithContext], skip_sensitive: bool = True, first_seen: Dict[str, datetime] | None = None,
+    observations: dict[str, dict] | None = None,
 ) -> List[Tuple[PostWithContext, float, Dict[str, float]]]:
     now = datetime.now(timezone.utc)
     ranked = []
     for p in posts:
         if skip_sensitive and p.post.possibly_sensitive:
             continue
-        s, parts = score_post(p, now, (first_seen or {}).get(str(p.post.post_id)))
+        s, parts = score_post(p, now, (first_seen or {}).get(str(p.post.post_id)),
+                              (observations or {}).get(str(p.post.post_id)))
         ranked.append((p, s, parts))
     ranked.sort(key=lambda t: t[1], reverse=True)
     return ranked

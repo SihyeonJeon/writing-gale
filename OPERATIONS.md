@@ -53,6 +53,10 @@ Vision web detection, capped at 30 calls a day and 900 per 30 days).
 
 1. Rank eligible posts by freshness, spread, note requests, media and topic (`src/selection.py`).
    A post that just entered the feed counts double, fading over the next hours.
+   On repeat observations 1–60 minutes apart, spread uses the observed engagement increase per hour
+   with the existing weights (likes + 2×reposts + 2×quotes + replies). A stalled post has zero recent
+   growth even if its cumulative likes are large. First observations, missing counters and decreased
+   counters use the lifetime-rate fallback. Impression growth is recorded alongside engagement.
 2. Skip posts with nothing to check before any LLM call.
 3. For a post with video: download the smallest MP4 the API lists, take 4 frames and transcribe the audio
    locally (Whisper). Nothing is kept after the run.
@@ -81,7 +85,8 @@ Vision web detection, capped at 30 calls a day and 900 per 30 days).
 
 The eligible-feed call expands `author_id` and requests `user.fields=id,name,username,verified,public_metrics`.
 `Post.author` holds the author snapshot and its observation time, separately from post engagement.
-First-seen ledger entries record author ID, username, author metrics, post metrics and post creation time.
+First-seen and repeated `feed_observed` ledger entries record author ID, username, author metrics,
+post metrics and post creation time. Repeated snapshots supply the next poll's growth measurement.
 Missing author data stays absent. Follower count refers to its observation time. Author popularity is
 recorded for analysis; it is not an instruction to the note writer or an added ranking weight.
 

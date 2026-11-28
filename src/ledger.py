@@ -110,6 +110,23 @@ def first_seen() -> Dict[str, datetime]:
     return out
 
 
+def latest_feed_observations(now: datetime | None = None) -> Dict[str, Dict[str, Any]]:
+    """Latest usable prior metric snapshot for each candidate, at least a minute apart."""
+    now = now or datetime.now(timezone.utc)
+    out = {}
+    for rec in records_since(1):
+        if rec.get("decision") not in {"seen", "feed_observed"} or not rec.get("post_public_metrics"):
+            continue
+        try:
+            elapsed = (now - datetime.fromisoformat(rec["ts"])).total_seconds()
+            pid = str(rec["post_id"])
+            if 60 <= elapsed <= 3600 and (pid not in out or rec["ts"] > out[pid]["ts"]):
+                out[pid] = rec
+        except (KeyError, ValueError, TypeError):
+            continue
+    return out
+
+
 def seen_post_ids() -> Set[str]:
     path = ledger_path()
     if not path.exists():
