@@ -406,3 +406,31 @@ class SourceRepair(unittest.TestCase):
         self.assertIn("GET 403", repair_input)
         self.assertIn("GET 200", repair_input)
         self.assertIn("The official record gives the date.", repair_input)
+
+
+class EligiblePagination(unittest.TestCase):
+    def test_pages_are_followed_and_posts_deduplicated(self):
+        from unittest.mock import patch
+
+        from cnapi.get_api_eligible_posts import get_posts_eligible_for_notes
+
+        a, b = _post("First post", pid="1"), _post("Second post", pid="2")
+        with patch("cnapi.get_api_eligible_posts._fetch_posts_eligible_for_notes",
+                   side_effect=[{"meta": {"next_token": "next"}}, {"meta": {}}]) as fetch, \
+             patch("cnapi.get_api_eligible_posts._parse_posts_eligible_response",
+                   side_effect=[[a], [a, b]]):
+            posts = get_posts_eligible_for_notes(100, True, max_pages=3)
+        self.assertEqual([p.post.post_id for p in posts], ["1", "2"])
+        self.assertEqual(fetch.call_args_list[1].args, (100, True, "next"))
+        self.assertEqual(fetch.call_count, 2)
+
+    def test_repeated_token_stops_pagination(self):
+        from unittest.mock import patch
+
+        from cnapi.get_api_eligible_posts import get_posts_eligible_for_notes
+
+        with patch("cnapi.get_api_eligible_posts._fetch_posts_eligible_for_notes",
+                   return_value={"meta": {"next_token": "same"}}) as fetch, \
+             patch("cnapi.get_api_eligible_posts._parse_posts_eligible_response", return_value=[]):
+            get_posts_eligible_for_notes(max_pages=5)
+        self.assertEqual(fetch.call_count, 2)

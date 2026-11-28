@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Dict, List
+from urllib.parse import quote
 
 from cnapi.xurl_util import run_xurl
 
@@ -7,7 +8,7 @@ from data_models import Media, Post, PostWithContext
 
 
 def _fetch_posts_eligible_for_notes(
-    max_results: int = 2, test_mode: bool = True
+    max_results: int = 2, test_mode: bool = True, pagination_token: str | None = None
 ) -> dict:
     """
     Fetch posts eligible for notes by calling the Community Notes API.
@@ -26,6 +27,8 @@ def _fetch_posts_eligible_for_notes(
         "&expansions=attachments.media_keys,referenced_tweets.id,referenced_tweets.id.attachments.media_keys"
         "&media.fields=alt_text,duration_ms,height,media_key,preview_image_url,public_metrics,type,url,width,variants"
     )
+    if pagination_token:
+        path += "&pagination_token=" + quote(pagination_token, safe="")
     cmd = [
         "xurl",
         path,
@@ -125,15 +128,18 @@ def _parse_posts_eligible_response(resp: Dict) -> List[PostWithContext]:
 
 
 def get_posts_eligible_for_notes(
-    max_results: int = 2, test_mode: bool = True
+    max_results: int = 2, test_mode: bool = True, max_pages: int = 1
 ) -> List[PostWithContext]:
-    """
-    Get posts eligible for notes by calling the Community Notes API.
-    For more details, see: https://docs.x.com/x-api/community-notes/introduction
-
-    Returns:
-        A list of `Post` objects.
-    """
-    return _parse_posts_eligible_response(
-        _fetch_posts_eligible_for_notes(max_results, test_mode)
-    )
+    """Read bounded pages of the official eligible feed and deduplicate posts across pages."""
+    posts: dict[str, PostWithContext] = {}
+    token = None
+    seen_tokens: set[str] = set()
+    for _ in range(max_pages):
+        response = _fetch_posts_eligible_for_notes(max_results, test_mode, token)
+        for post in _parse_posts_eligible_response(response):
+            posts.setdefault(post.post.post_id, post)
+        token = (response.get("meta") or {}).get("next_token")
+        if not token or token in seen_tokens:
+            break
+        seen_tokens.add(token)
+    return list(posts.values())

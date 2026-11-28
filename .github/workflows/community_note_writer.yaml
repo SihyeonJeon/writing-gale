@@ -128,6 +128,7 @@ jobs:
           uv run src/main.py $ARGS
         env:
           NUM_POSTS: ${{ inputs.num_posts || vars.NUM_POSTS || '1' }}
+          FEED_PAGES: ${{ vars.FEED_PAGES || '1' }}
           NOTE_CONCURRENCY: ${{ vars.NOTE_CONCURRENCY || '1' }}
           TEST_NOTE_TARGET: ${{ vars.TEST_NOTE_TARGET || '0' }}
           DAILY_NOTE_CAP: ${{ vars.DAILY_NOTE_CAP || '10' }}
