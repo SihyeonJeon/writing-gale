@@ -39,6 +39,15 @@ class Media(BaseModel):
     variants: List[Dict[str, Any]] = []
 
 
+class AuthorSnapshot(BaseModel):
+    user_id: str
+    username: Optional[str] = None
+    name: Optional[str] = None
+    verified: Optional[bool] = None
+    public_metrics: Dict[str, int] = {}
+    observed_at: datetime
+
+
 class Post(BaseModel):
     post_id: str
     author_id: str
@@ -47,6 +56,7 @@ class Post(BaseModel):
     media: List[Media]
     public_metrics: Dict[str, int] = {}
     possibly_sensitive: bool = False
+    author: Optional[AuthorSnapshot] = None
 
 
 class PostWithContext(BaseModel):
@@ -67,3 +77,4 @@ class NoteResult(BaseModel):
     post: Optional[PostWithContext] = None
     context_description: Optional[str] = None
     gate_warnings: List[str] = []
+    validation_trace: List[Dict[str, Any]] = []

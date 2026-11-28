@@ -383,6 +383,8 @@ class SourceRepair(unittest.TestCase):
         repaired = {
             **initial,
             "note_text": "The official record gives the date. " + public,
+            "evidence": [{"fact": "The official record gives the date.", "url": public,
+                          "quote": "The official record gives the date."}],
         }
         status = lambda url: 403 if url == blocked else 200
         with ExitStack() as stack:

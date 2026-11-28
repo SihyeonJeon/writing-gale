@@ -53,6 +53,11 @@ def _worker(
         print(f"Post {post_with_context.post.post_id}: skipped before research ({reason})")
         return
     note_result: NoteResult = research_post_and_write_note(post_with_context)
+    if note_result.validation_trace:
+        ledger.record(
+            post_with_context.post.post_id, "research_completed", test_mode=test_mode,
+            validation_trace=note_result.validation_trace,
+        )
 
     log_strings: List[str] = ["-" * 20, f"Post: {post_with_context.post.post_id}", "-" * 20]
     if note_result.context_description is not None and VERBOSE:
@@ -205,7 +210,17 @@ def main(
     already_seen = ledger.seen_post_ids()
     for p, sc, parts in ranked:
         if p.post.post_id not in already_seen:
-            ledger.record(p.post.post_id, "seen", score=round(sc, 3), **{k: round(v, 3) for k, v in parts.items()})
+            author = p.post.author
+            ledger.record(
+                p.post.post_id, "seen", score=round(sc, 3),
+                author_id=p.post.author_id,
+                author_username=author.username if author else None,
+                author_public_metrics=author.public_metrics if author else None,
+                author_observed_at=author.observed_at.isoformat() if author else None,
+                post_created_at=p.post.created_at.isoformat(),
+                post_public_metrics=p.post.public_metrics,
+                **{k: round(v, 3) for k, v in parts.items()},
+            )
     for p, sc, parts in ranked[: num_posts + 5]:
         print(f"  {p.post.post_id} score={sc:.2f} {parts}")
     eligible_posts = [p for p, _, _ in ranked[:num_posts]]

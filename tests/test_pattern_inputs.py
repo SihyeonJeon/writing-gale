@@ -159,6 +159,8 @@ class EvidenceVerification(unittest.TestCase):
             with self.subTest(supported=supported, addressed=addressed, issues=issues):
                 with patch("note_writer.critic.get_grok_search_json_response", return_value={
                     "evidence_supported": supported, "claim_addressed": addressed,
+                    "claim_checks": [{"claim": "The date", "kind": "other", "support_role": "primary_record",
+                                      "support_quote": "The source states the date.", "established": True}],
                     "issues": issues, "reason": "The source states the date.",
                 }):
                     self.assertEqual(critic.critique(None, "post", "note")["submit"], expected)

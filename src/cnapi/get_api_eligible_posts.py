@@ -1,10 +1,10 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List
 from urllib.parse import quote
 
 from cnapi.xurl_util import run_xurl
 
-from data_models import Media, Post, PostWithContext
+from data_models import AuthorSnapshot, Media, Post, PostWithContext
 
 
 def _fetch_posts_eligible_for_notes(
@@ -24,7 +24,8 @@ def _fetch_posts_eligible_for_notes(
         f"?test_mode={'true' if test_mode else 'false'}"
         f"&max_results={max_results}"
         "&tweet.fields=author_id,created_at,referenced_tweets,media_metadata,note_tweet,note_request_suggestions,suggested_source_links_with_counts,public_metrics,possibly_sensitive"
-        "&expansions=attachments.media_keys,referenced_tweets.id,referenced_tweets.id.attachments.media_keys"
+        "&expansions=author_id,attachments.media_keys,referenced_tweets.id,referenced_tweets.id.author_id,referenced_tweets.id.attachments.media_keys"
+        "&user.fields=id,name,username,verified,public_metrics"
         "&media.fields=alt_text,duration_ms,height,media_key,preview_image_url,public_metrics,type,url,width,variants"
     )
     if pagination_token:
@@ -35,7 +36,9 @@ def _fetch_posts_eligible_for_notes(
     ]
     return run_xurl(cmd)
 
-def _parse_individual_post(item: Dict, media_by_key: Dict[str, Dict]) -> Post:
+def _parse_individual_post(
+    item: Dict, media_by_key: Dict[str, Dict], authors_by_id: Dict[str, AuthorSnapshot] | None = None,
+) -> Post:
     media_objs: List[Media] = []
     media_keys = item.get("attachments", {}).get("media_keys", [])
 
@@ -59,6 +62,7 @@ def _parse_individual_post(item: Dict, media_by_key: Dict[str, Dict]) -> Post:
         media=media_objs,
         public_metrics=item.get("public_metrics") or {},
         possibly_sensitive=bool(item.get("possibly_sensitive", False)),
+        author=(authors_by_id or {}).get(item["author_id"]),
     )
     return post
 
@@ -76,6 +80,15 @@ def _parse_posts_eligible_response(resp: Dict) -> List[PostWithContext]:
     """
     includes_media = resp.get("includes", {}).get("media", [])
     media_by_key = {m["media_key"]: m for m in includes_media}
+    observed_at = datetime.now(timezone.utc)
+    authors_by_id = {
+        user["id"]: AuthorSnapshot(
+            user_id=user["id"], username=user.get("username"), name=user.get("name"),
+            verified=user.get("verified"), public_metrics=user.get("public_metrics") or {},
+            observed_at=observed_at,
+        )
+        for user in resp.get("includes", {}).get("users", [])
+    }
 
     includes_posts = resp.get("includes", {}).get("tweets", [])
     posts_by_id = {t["id"]: t for t in includes_posts}
@@ -86,7 +99,7 @@ def _parse_posts_eligible_response(resp: Dict) -> List[PostWithContext]:
 
     posts: List[Post] = []
     for item in resp.get("data", []):
-        post = _parse_individual_post(item, media_by_key)
+        post = _parse_individual_post(item, media_by_key, authors_by_id)
 
         # What people who requested a note on this post suggested. These are un-vetted user input.
         # They are stored on PostWithContext but not yet used by the note writer; to use them,
@@ -104,7 +117,7 @@ def _parse_posts_eligible_response(resp: Dict) -> List[PostWithContext]:
                     print(f"For post {post.post_id}, referenced post {referenced_post_id} not found in posts_by_id; skipping.")
                     continue
                 referenced_post_item = posts_by_id[referenced_post_id]
-                referenced_post = _parse_individual_post(referenced_post_item, media_by_key)
+                referenced_post = _parse_individual_post(referenced_post_item, media_by_key, authors_by_id)
 
                 if ref["type"] == "quoted":
                     assert quoted_post is None, "Multiple quoted posts found in a single post"

@@ -25,6 +25,51 @@ UNREADABLE_HOSTS = {"x.com", "twitter.com", "youtube.com", "youtu.be", "instagra
 
 _page_cache: Dict[str, Optional[str]] = {}
 
+
+def _quote_normalized(text: str) -> str:
+    text = re.sub(r"\s+", " ", html.unescape(text).lower().replace("’", "'").replace("“", '"').replace("”", '"')).strip()
+    # HTML text extraction inserts spaces at inline-tag boundaries, including before punctuation.
+    text = re.sub(r"\s+([.,;:!?)}\]])", r"\1", text)
+    return re.sub(r"([({\[])\s+", r"\1", text)
+
+
+def evidence_quote_problems(evidence: list[dict], pages: Optional[Dict[str, Optional[str]]] = None) -> List[str]:
+    """Compare evidence quotations against readable source text before model verification."""
+    if not evidence:
+        return ["evidence ledger is empty; supply each correction's source and exact supporting quote"]
+    problems = []
+    for item in evidence:
+        url, quote = item.get("url", ""), item.get("quote", "")
+        if len(quote.strip()) < 20:
+            problems.append(f"missing supporting source quote for {url}; quote the sentence establishing this fact")
+            continue
+        text = pages.get(url) if pages is not None else (None if _host(url) in UNREADABLE_HOSTS else page_text(url))
+        if text and len(text) >= 500 and _quote_normalized(quote) not in _quote_normalized(text):
+            problems.append(f"evidence quote is absent from {url}; open the page and use its exact supporting words")
+    return problems
+
+
+def source_excerpt(text: str, focus: str = "", max_chars: int = 2400) -> str:
+    """Give repair and verification the relevant article passages instead of only its navigation."""
+    if len(text) <= max_chars:
+        return text
+    tokens = set(re.findall(r"\b[\w'-]{4,}\b", URL_RE.sub("", focus).lower())) - {
+        "this", "that", "with", "from", "have", "were", "will", "their", "there", "they",
+    }
+    if not tokens:
+        return text[:max_chars]
+    # Overlapping windows keep a sentence near a boundary in at least one complete passage.
+    windows = [(i, text[i:i + 800]) for i in range(0, len(text), 600)]
+    scored = sorted(windows, key=lambda w: (-len(tokens & set(re.findall(r"\b[\w'-]{4,}\b", w[1].lower()))), w[0]))
+    selected = []
+    for start, passage in scored:
+        if any(abs(start - other) < 800 for other, _ in selected):
+            continue
+        selected.append((start, passage))
+        if len(selected) == 3:
+            break
+    return "\n[separate source passage]\n".join(p for _, p in sorted(selected))[:max_chars]
+
 # Capitalised words that are not names, or that pages write in other forms (Nov. vs November).
 _NOT_NAMES = {
     "the", "this", "that", "these", "those", "there", "they", "their", "its", "his", "her", "and", "but", "for",
