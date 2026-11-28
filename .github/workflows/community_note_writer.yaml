@@ -123,11 +123,12 @@ jobs:
       - name: Run the writer
         if: steps.switch.outputs.run == 'true'
         run: |
-          ARGS="--num-posts ${NUM_POSTS} --fetch 100"
+          ARGS="--num-posts ${NUM_POSTS} --fetch 100 --concurrency ${NOTE_CONCURRENCY}"
           if [ "$MODE" = "dry_run" ]; then ARGS="$ARGS --dry-run"; fi
           uv run src/main.py $ARGS
         env:
           NUM_POSTS: ${{ inputs.num_posts || vars.NUM_POSTS || '1' }}
+          NOTE_CONCURRENCY: ${{ vars.NOTE_CONCURRENCY || '1' }}
           TEST_NOTE_TARGET: ${{ vars.TEST_NOTE_TARGET || '0' }}
           DAILY_NOTE_CAP: ${{ vars.DAILY_NOTE_CAP || '10' }}
           MAX_USD_PER_RUN: ${{ vars.MAX_USD_PER_RUN || '0.5' }}

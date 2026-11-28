@@ -147,7 +147,6 @@ def main(
             print("Test note target reached. Waiting for admission review.")
             return
         num_posts = min(num_posts, remaining_target)
-        concurrency = 1
 
     # A reached limit stops research, not the feed read: the feed is still fetched and logged (no LLM
     # cost) so we keep knowing when each post first appeared.
