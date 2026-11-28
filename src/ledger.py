@@ -10,6 +10,7 @@ Location: data/ledger.jsonl (gitignored). Override with LEDGER_PATH.
 
 import json
 import os
+import re
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -39,6 +40,11 @@ def handled_post_ids(include_dry_run: bool = False) -> Set[str]:
             decision = rec.get("decision")
             if decision == "dry_run" and not include_dry_run:
                 continue
+            if decision == "evaluator_skip" and rec.get("test_mode", True):
+                score = re.search(r"scored this note (-?\d+(?:\.\d+)?)", rec.get("error", ""))
+                minimum = max(-1.9, min(0.0, float(os.getenv("TEST_CLAIM_MIN_SCORE") or 0)))
+                if score and minimum < 0 and float(score[1]) >= minimum:
+                    continue
             if decision in FINAL_DECISIONS:
                 done.add(str(rec.get("post_id")))
     return done

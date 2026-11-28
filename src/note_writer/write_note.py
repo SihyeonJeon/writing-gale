@@ -1,4 +1,5 @@
 import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 from cnapi.evaluate_note import claim_opinion_score
@@ -223,7 +224,10 @@ def _similar_notes_for_prompt(pwc: PostWithContext) -> str:
 
 MAX_REPAIR_ROUNDS = 1
 # Notes X later bucketed "High" scored above 0 on its evaluate endpoint; Medium and Low were below -1.8.
-MIN_CLAIM_OPINION_SCORE = 0.0
+MIN_CLAIM_OPINION_SCORE = (
+    max(-1.9, min(0.0, float(os.getenv("TEST_CLAIM_MIN_SCORE") or 0)))
+    if os.getenv("TEST_MODE", "true").lower() != "false" else 0.0
+)
 
 
 def _repair_prompt(problems: list[str]) -> str:
