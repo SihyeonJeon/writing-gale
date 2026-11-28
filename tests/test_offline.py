@@ -306,6 +306,12 @@ class TestNoteTarget(unittest.TestCase):
         import main
         notes = [{"id": str(i)} for i in range(48)]
         records = [{"decision": "submitted", "note_id": "48", "test_mode": True}]
+        reserved = []
+
+        def worker_result(post, dry_run, test_mode, submit_guard=None):
+            if submit_guard():
+                reserved.append(post.post.post_id)
+
         posts = [_post("Official results announced", pid=str(i)) for i in range(4)]
         with patch.dict(os.environ, {"TEST_NOTE_TARGET": "50"}), \
              patch("main.outcomes.refresh", return_value=notes), \
@@ -316,9 +322,9 @@ class TestNoteTarget(unittest.TestCase):
              patch("main.ledger.submitted_last_24h", return_value=0), \
              patch("main.ledger.record"), \
              patch("main.get_posts_eligible_for_notes", return_value=posts), \
-             patch("main._worker") as worker:
+             patch("main._worker", side_effect=worker_result):
             main.main(num_posts=10, concurrency=4, test_mode=True)
-            self.assertEqual(worker.call_count, 1)
+            self.assertEqual(len(reserved), 1)
 
 
 class SourceAccess(unittest.TestCase):
@@ -451,3 +457,25 @@ class EvaluatorRetry(unittest.TestCase):
             self.assertEqual(ledger.handled_post_ids(), {"2", "3", "4"})
             with patch.dict(os.environ, {"TEST_CLAIM_MIN_SCORE": "0"}):
                 self.assertEqual(ledger.handled_post_ids(), {"1", "2", "3", "4"})
+
+
+class SubmissionReservation(unittest.TestCase):
+    def test_reserved_target_blocks_api_submission(self):
+        from unittest.mock import patch
+
+        from data_models import MisleadingTag, NoteResult, ProposedMisleadingNote
+        import main
+
+        post = _post("The official record gives another date.")
+        result = NoteResult(
+            post=post,
+            note=ProposedMisleadingNote(
+                post_id=post.post.post_id,
+                note_text="The official record gives another date. https://example.org/record",
+                misleading_tags=[MisleadingTag("factual_error")],
+            ),
+        )
+        with patch("main.research_post_and_write_note", return_value=result), \
+             patch("main.ledger.record"), patch("main.submit_note") as submit:
+            main._worker(post, test_mode=True, submit_guard=lambda: False)
+        submit.assert_not_called()

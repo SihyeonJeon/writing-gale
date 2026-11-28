@@ -5,7 +5,7 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import List
+from typing import Callable, List
 
 from cnapi.get_api_eligible_posts import get_posts_eligible_for_notes
 from cnapi.submit_note import submit_note
@@ -41,6 +41,7 @@ def _worker(
     post_with_context: PostWithContext,
     dry_run: bool = False,
     test_mode: bool = True,
+    submit_guard: Callable[[], bool] | None = None,
 ):
     """
     Fetch and try to write and submit a note for one post.
@@ -84,6 +85,10 @@ def _worker(
         ledger.record(post_id, "dry_run", note_text=note_text, misleading_tags=tags, gate_warnings=note_result.gate_warnings, test_mode=test_mode)
 
     if note_result.note is not None and not dry_run:
+        if submit_guard is not None and not submit_guard():
+            ledger.record(post_id, "target_skip", note_text=note_text, test_mode=test_mode)
+            print("".join(log_strings) + "\nTest note target reserved by another worker; skipping submission.")
+            return
         try:
             try:
                 response = submit_note(note=note_result.note, test_mode=test_mode, verbose_if_failed=False)
@@ -132,6 +137,7 @@ def main(
     day instead of using it up in a few hours (0 = no limit).
     """
     test_target = int(os.getenv("TEST_NOTE_TARGET") or 0)
+    remaining_target = None
     if test_mode and test_target and not dry_run:
         # Refresh from X before spending, and include local submissions while X catches up.
         notes = outcomes.refresh(include_live=False)
@@ -146,7 +152,6 @@ def main(
             ledger.record("-", "run_summary", processed=0, reason="test note target reached", test_mode=True)
             print("Test note target reached. Waiting for admission review.")
             return
-        num_posts = min(num_posts, remaining_target)
 
     # A reached limit stops research, not the feed read: the feed is still fetched and logged (no LLM
     # cost) so we keep knowing when each post first appeared.
@@ -219,17 +224,31 @@ def main(
         return
 
     submitted_before = ledger.submitted_last_24h(test_mode=test_mode)
-    state = {"started": 0}
+    state = {"started": 0, "reserved": 0}
     lock = threading.Lock()
+
+    def reserve_submission() -> bool:
+        # Keep the target exact while researching multiple candidates for the last open slot.
+        # A failed API call consumes this run's reservation. The next run refreshes X and retries.
+        with lock:
+            if state["reserved"] >= remaining_target:
+                return False
+            state["reserved"] += 1
+            return True
 
     def run_one(post: PostWithContext) -> None:
         with lock:
+            if remaining_target is not None and state["reserved"] >= remaining_target:
+                return
             if max_usd and USAGE["usd"] >= max_usd:
                 return
             if daily_cap and not dry_run and ledger.submitted_last_24h(test_mode=test_mode) >= daily_cap:
                 return
             state["started"] += 1
-        _worker(post, dry_run, test_mode)
+        _worker(
+            post, dry_run, test_mode,
+            submit_guard=reserve_submission if remaining_target is not None else None,
+        )
 
     if concurrency > 1:
         with ThreadPoolExecutor(max_workers=concurrency) as executor:
