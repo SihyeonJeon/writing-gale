@@ -178,7 +178,7 @@ def main(
     try:
         eligible_posts: List[PostWithContext] = get_posts_eligible_for_notes(
             max_results=max(fetch, num_posts, 1), test_mode=test_mode,
-            max_pages=max(1, min(int(os.getenv("FEED_PAGES") or 1), 5)),
+            max_pages=max(1, min(int(os.getenv("FEED_PAGES") or 1), 10)),
         )
     except subprocess.CalledProcessError as e:
         sys.exit(
