@@ -108,10 +108,7 @@ def url_status(url: str, timeout: float = 10.0) -> Optional[int]:
     status: Optional[int] = None
     headers = {"User-Agent": UA, "Accept": "text/html,application/xhtml+xml,*/*"}
     try:
-        status = _fetch_status(url, "HEAD", timeout, headers)
-        # Many sites reject HEAD (403/405) but serve GET fine; the evaluator cares about GET.
-        if status != 200:
-            status = _fetch_status(url, "GET", timeout, headers)
+        status = _fetch_status(url, "GET", timeout, headers)
     except requests.RequestException:
         status = None
     if status is None:  # one retry for transient network errors / slow hosts
@@ -121,12 +118,6 @@ def url_status(url: str, timeout: float = 10.0) -> Optional[int]:
             status = None
     _url_cache[url] = status
     return status
-
-
-# Statuses that usually mean "this client was bot-blocked", not "the page is gone". Major trusted
-# sources (Reuters 401, CDC 403 seen from a laptop) do this. Treated as warnings until real
-# UrlValidity scores tell us whether X's checker is blocked too.
-BLOCKED_STATUSES = {401, 403, 429, 999}
 
 
 def normalize_note(text: str) -> str:
@@ -165,11 +156,9 @@ def _norm_url(url: str) -> str:
 
 
 def unseen_urls(note_urls: List[str], seen_urls: List[str]) -> List[str]:
-    """Note URLs that the research step's search tools never returned, by exact page or by site.
-    A model citing a page it never opened is how hallucinated or non-supporting links get in."""
+    """Require the exact researched page, including its query, instead of accepting its whole site."""
     pages = {_norm_url(u) for u in seen_urls}
-    hosts = {_host(u) for u in seen_urls}
-    return [u for u in note_urls if _norm_url(u) not in pages and _host(u) not in hosts]
+    return [u for u in note_urls if _norm_url(u) not in pages]
 
 
 @dataclass
@@ -218,8 +207,8 @@ def check_note(text: str, check_urls: bool = True, seen_urls: Optional[List[str]
         if banned_url(u):
             problems.append(f"cites a source raters distrust or that is not a real source (AI chatbot, search link, shortener, dictionary): {u}")
 
-    # Only enforced when the research step returned citations at all (it can answer from memory).
-    if seen_urls:
+    # An empty search result cannot establish a source.
+    if seen_urls is not None:
         for u in unseen_urls(urls, seen_urls):
             problems.append(f"cites a page your search never returned; cite only pages you actually found: {u}")
 
@@ -232,11 +221,8 @@ def check_note(text: str, check_urls: bool = True, seen_urls: Optional[List[str]
         for u, s in zip(urls, statuses):
             if s == 200:
                 continue
-            if s in BLOCKED_STATUSES:
-                warnings.append(f"URL bot-blocked from here (HTTP {s}), may still be fine: {u}")
-            else:
-                dead.append(u)
-                why = "redirects to the site's front page, so the article is gone" if s == SOFT_REDIRECT else f"got {s}"
-                problems.append(f"URL does not return HTTP 200 ({why}): {u}")
+            dead.append(u)
+            why = "redirects to the site's front page, so the article is gone" if s == SOFT_REDIRECT else f"got {s}"
+            problems.append(f"URL does not return HTTP 200 on GET ({why}); find an accessible source supporting the same fact: {u}")
 
     return GateResult(ok=not problems, problems=problems, dead_urls=dead, warnings=warnings)

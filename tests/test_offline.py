@@ -68,7 +68,7 @@ class Gates(unittest.TestCase):
     def test_unseen(self):
         seen = ["https://www.reuters.com/world/a-b/", "https://apnews.com/article/x"]
         self.assertEqual(unseen_urls(["https://reuters.com/world/a-b"], seen), [])
-        self.assertEqual(unseen_urls(["https://apnews.com/other"], seen), [])  # same site is fine
+        self.assertEqual(unseen_urls(["https://apnews.com/other"], seen), ["https://apnews.com/other"])
         self.assertEqual(unseen_urls(["https://made-up.org/p"], seen), ["https://made-up.org/p"])
 
     def test_check_note(self):
@@ -319,3 +319,90 @@ class TestNoteTarget(unittest.TestCase):
              patch("main._worker") as worker:
             main.main(num_posts=10, concurrency=4, test_mode=True)
             self.assertEqual(worker.call_count, 1)
+
+
+class SourceAccess(unittest.TestCase):
+    def test_blocked_and_unknown_sources_fail(self):
+        from unittest.mock import patch
+        for status in (401, 403, 429, 999, 404, None):
+            with self.subTest(status=status), patch("note_writer.gates.url_status", return_value=status):
+                result = check_note("The official record gives the date. https://example.org/record")
+                self.assertFalse(result.ok)
+                self.assertIn("https://example.org/record", result.dead_urls)
+
+    def test_get_is_required_even_when_head_would_succeed(self):
+        from unittest.mock import patch
+
+        from note_writer import gates
+        gates._url_cache.clear()
+        with patch("note_writer.gates._fetch_status", return_value=404) as fetch:
+            self.assertEqual(gates.url_status("https://example.org/missing"), 404)
+            self.assertEqual(fetch.call_args.args[1], "GET")
+        gates._url_cache.clear()
+
+    def test_empty_research_cannot_authorize_a_citation(self):
+        result = check_note("The official record gives the date. https://example.org/record", check_urls=False, seen_urls=[])
+        self.assertFalse(result.ok)
+
+    def test_checked_source_context_supplies_status_and_excerpt(self):
+        from unittest.mock import patch
+
+        from note_writer.write_note import _source_context
+        with patch("note_writer.write_note.url_status", side_effect=[200, 403]), \
+             patch("note_writer.write_note.page_text", return_value="official source text") as page:
+            context = _source_context(["https://example.org/record", "https://blocked.org/page"])
+        self.assertIn("GET 200", context)
+        self.assertIn("GET 403", context)
+        self.assertIn("official source text", context)
+        page.assert_called_once_with("https://example.org/record")
+
+
+class SourceRepair(unittest.TestCase):
+    def test_blocked_source_is_repaired_with_checked_source_input(self):
+        from contextlib import ExitStack
+        from unittest.mock import patch
+
+        from note_writer.write_note import research_post_and_write_note
+
+        blocked = "https://blocked.example/story"
+        public = "https://public.example/record"
+        initial = {
+            "decision": "WRITE NOTE",
+            "note_text": "The official record gives the date. " + blocked,
+            "misleading_tags": ["factual_error"],
+            "evidence": [],
+            "assumptions": [],
+            "_cited_urls": [blocked, public],
+        }
+        repaired = {
+            **initial,
+            "note_text": "The official record gives the date. " + public,
+        }
+        status = lambda url: 403 if url == blocked else 200
+        with ExitStack() as stack:
+            for name, value in {
+                "inspect_video": None,
+                "_similar_notes_for_prompt": "",
+                "reverse_image.search": None,
+                "cards_for_prompt": "",
+                "examples_for_prompt": "",
+                "unsupported_specifics": [],
+                "claim_opinion_score": 1.0,
+                "image_check.check": ([], []),
+                "page_text": "The official record gives the date.",
+                "critique": {"submit": True},
+            }.items():
+                stack.enter_context(patch("note_writer.write_note." + name, return_value=value))
+            stack.enter_context(patch("note_writer.write_note.url_status", side_effect=status))
+            stack.enter_context(patch("note_writer.gates.url_status", side_effect=status))
+            model = stack.enter_context(patch(
+                "note_writer.write_note.get_grok_search_json_response",
+                side_effect=[initial, repaired],
+            ))
+            result = research_post_and_write_note(_post("The published date is incorrect."))
+        self.assertIsNotNone(result.note)
+        self.assertIn(public, result.note.note_text)
+        repair_input = model.call_args_list[1].args[0]
+        self.assertIn("GET 403", repair_input)
+        self.assertIn("GET 200", repair_input)
+        self.assertIn("The official record gives the date.", repair_input)
