@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
+from note_patterns import HELPFUL, script_group
+
 DIR = Path(os.getenv("BENCHMARK_DIR", Path(__file__).resolve().parent.parent / "data" / "benchmark"))
 URL_RE = re.compile(r"https?://\S+")
 WORD_RE = re.compile(r"[^\W\d_]{3,}|\d{4}", re.UNICODE)
@@ -110,7 +112,7 @@ def _host(url: str) -> str:
 
 
 def distrusted_domain(url: str) -> Optional[str]:
-    """A reason string if notes citing this domain are rated Not Helpful far more often than average."""
+    """Legacy aggregate diagnostic retained for callers; source checks use the cited page's evidence."""
     domains, base = _domains()
     d = domains.get(_host(url))
     if not d or not base or d["not_helpful"] < NOT_HELPFUL_FACTOR * base["not_helpful"]:
@@ -140,8 +142,7 @@ def _cards() -> Dict:
 
 
 def cards_for_prompt(has_media: bool, max_cards: int = 10) -> str:
-    """Template cards: the note openings with the highest measured helpful rates, each with real notes
-    that used it. Media posts get the media openings first, other posts the rest."""
+    """Observed opening frequencies retained for older benchmark caches."""
     data = _cards()
     cards = [c for c in data.get("cards", []) if c.get("examples")]
     if not cards:
@@ -149,21 +150,129 @@ def cards_for_prompt(has_media: bool, max_cards: int = 10) -> str:
     cards.sort(key=lambda c: (c["media"] != has_media, -c["helpful"]))
     base = data["base_helpful"]
     out = (
-        f"\nTemplate cards, measured on {data['notes']:,} public Community Notes from the last {data['days']} days "
-        f"(average helpful rate {base:.1%}). Each card is how notes with a high helpful rate open, with real notes "
-        "that raters marked helpful. Pick the card that fits this post, keep its form (what it names first, "
-        "how short it is, where the links go), write it in the post's language, and put in your own verified "
-        "facts. Never reuse a card's facts or links.\n"
+        f"\nObserved openings in {data['notes']:,} public notes over {data['days']} days "
+        f"(currently Helpful fraction {base:.1%}, including pending notes in the denominator). "
+        "Reproduce visible form using this post's verified facts. These are observational frequencies. "
+        "Keep the examples' historical facts and links confined to the reference examples.\n"
     )
     for c in cards[:max_cards]:
         out += f'- Opens "{c["opening"]} ...": helpful {c["helpful"]:.1%} of {c["notes"]:,} notes by {c.get("authors", "?")} writers.\n'
         out += "".join(f"    real note: {e[:300]}\n" for e in c["examples"][:1])
-    avoid = data.get("avoid", [])[:8]
-    if avoid:
-        out += "Openings with below-average helpful rates, do not start a note this way: " + "; ".join(
-            f'"{a["opening"]}" ({a["helpful"]:.1%} of {a["notes"]:,})' for a in avoid
-        ) + "\n"
+    for opening in data.get("avoid", [])[:8]:
+        out += (
+            f'- Observed opening "{opening["opening"]}": currently Helpful '
+            f'{opening["helpful"]:.1%} of {opening["notes"]:,} notes.\n'
+        )
     return out
+
+
+@lru_cache(maxsize=1)
+def _patterns() -> dict:
+    path = DIR / "observed_patterns.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def observed_patterns_for_prompt(post_text: str, post_id: str = "") -> str:
+    data = _patterns()
+    if data.get("schema_version") != 1:
+        return ""
+    script = script_group(post_text)
+    cohort = data.get("cohorts", {}).get(script)
+    if not cohort or not cohort.get("forms"):
+        return ""
+    helpful = cohort["status_counts"].get(HELPFUL, 0)
+    lines = [
+        "\nObserved public-note forms",
+        f'Snapshot {data["data_date"]}; window {data["days"]} days; script group {script} (mixed languages).',
+        f'Cohort {cohort["notes"]:,} notes; currently Helpful {helpful:,}.',
+        f'Measurement: {data["measurement"]}.',
+        "For a justified note, reproduce a compatible observed form with the current verified facts.",
+        "Choose the post's language. Keep each reference's historical facts and URLs within that reference.",
+        "Frequency tables describe observations. Keep explanations of raters' motives out of the drafting process.",
+    ]
+    comparison = data["comparison"]
+    if comparison["pairs"]:
+        lines.append(
+            f'Same-post observations across {comparison["posts"]:,} posts and {comparison["pairs"]:,} pairs. '
+            'Each post has one currently Helpful note. Peer statuses include pending ratings. '
+            'Timing, author and language differences remain unadjusted.'
+        )
+        for name, count in comparison["features"].items():
+            lines.append(
+                f'- {name}: Helpful-side {count["helpful"]:,}/{comparison["pairs"]:,}; '
+                f'peer-side {count["peer"]:,}/{comparison["pairs"]:,}.'
+            )
+    source_data = data.get("domain_observations")
+    if source_data:
+        global_count = data["cohorts"]["all"]["status_counts"].get(HELPFUL, 0)
+        lines.append(
+            f'Cited-host counts in all {global_count:,} currently Helpful notes across scripts. '
+            'A note may cite multiple hosts. These counts measure observed use.'
+        )
+        for host, observation in sorted(
+            source_data["domains"].items(), key=lambda item: -item[1]["helpful_notes"],
+        )[:8]:
+            lines.append(
+                f'- {host}: cited by {observation["helpful_notes"]:,} Helpful notes; '
+                f'{observation["notes"]:,} citing notes across all statuses.'
+            )
+    shown = 0
+    shown_posts = {str(post_id)}
+    for form in cohort["forms"]:
+        # The writer API requires a source URL and the existing 280-character text limit.
+        if form["url_count"] == "0" or form["body_char_band"] in ("0", "281+"):
+            continue
+        examples = [example for example in form["examples"] if example["post_id"] not in shown_posts]
+        if not examples:
+            continue
+        lines.append(
+            f'Form: body characters {form["body_char_band"]}, URL count {form["url_count"]}, '
+            f'emoji present {form["emoji"]}, exclamation present {form["exclamation"]}; '
+            f'observed in {form["notes"]:,}/{helpful:,} Helpful notes, '
+            f'{form["posts"]:,} posts, {form["authors"]:,} authors.'
+        )
+        example = examples[0]
+        lines.append(f'Observed note {example["note_id"]}, post {example["post_id"]}: {example["text"]}')
+        shown_posts.add(example["post_id"])
+        shown += 1
+        if shown == 3:
+            break
+    return "\n".join(lines) + "\n" if shown else ""
+
+
+def source_observations_for_prompt(urls: List[str]) -> str:
+    snapshot = _patterns().get("domain_observations")
+    domains, base = (snapshot["domains"], snapshot["base"]) if snapshot else _domains()
+    if not domains:
+        return ""
+    lines = []
+    for host in sorted({_host(url) for url in urls}):
+        observation = domains.get(host)
+        if not observation:
+            continue
+        if "helpful_notes" in observation:
+            lines.append(
+                f'- {host}: {observation["notes"]:,} citing notes; '
+                f'currently Helpful {observation["helpful_notes"]:,}; '
+                f'currently Not Helpful {observation["not_helpful_notes"]:,}; '
+                f'pending {observation["needs_more_ratings"]:,}.'
+            )
+        else:
+            lines.append(
+                f'- {host}: {observation["notes"]:,} citing notes; '
+                f'currently Helpful {observation["helpful"]:.2%}; '
+                f'currently Not Helpful {observation["not_helpful"]:.2%}.'
+            )
+    if not lines:
+        return ""
+    return (
+        "\nObserved citation-domain frequencies in the public-note benchmark. "
+        f'Corpus currently Helpful fraction {base.get("helpful", 0):.2%}. '
+        "Denominators include pending notes. Topic, language and exposure are unadjusted. "
+        "Verify this particular page's facts and accessibility.\n" + "\n".join(lines) + "\n"
+    )
 
 
 def meta() -> Dict:

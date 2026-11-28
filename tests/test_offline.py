@@ -54,9 +54,9 @@ class Gates(unittest.TestCase):
     def test_normalize(self):
         self.assertEqual(
             normalize_note("Community Note: From 2019 \u2014 not 2024 https://a.com/x\u2013y"),
-            "From 2019, not 2024\n\nhttps://a.com/x\u2013y",
+            "From 2019 \u2014 not 2024\n\nhttps://a.com/x\u2013y",
         )
-        self.assertEqual(normalize_note("Rose 3\u20135% https://b.org"), "Rose 3-5%\n\nhttps://b.org")
+        self.assertEqual(normalize_note("Rose 3\u20135% https://b.org"), "Rose 3\u20135%\n\nhttps://b.org")
         # a link in the middle moves to the end, each link on its own line, no leftover punctuation
         self.assertEqual(
             normalize_note("From a 1981 book. https://a.org/b No other record exists. https://c.org/d."),
@@ -78,9 +78,9 @@ class Gates(unittest.TestCase):
         self.assertFalse(check_note("No source here", check_urls=False).ok)
         self.assertFalse(check_note("Obviously false https://x.org", check_urls=False).ok)
         self.assertFalse(check_note("See https://grok.com/share/abc", check_urls=False).ok)
-        self.assertFalse(check_note("So, the photo is from 2019. https://a.org/b", check_urls=False).ok)
+        self.assertTrue(check_note("So, the photo is from 2019. https://a.org/b", check_urls=False).ok)
         self.assertFalse(check_note("The clip is a game-changer for the case. https://a.org/b", check_urls=False).ok)
-        self.assertEqual(normalize_note("The photo is from 2019! https://a.org/b"), "The photo is from 2019.\n\nhttps://a.org/b")
+        self.assertEqual(normalize_note("The photo is from 2019! https://a.org/b"), "The photo is from 2019!\n\nhttps://a.org/b")
 
 
 class Support(unittest.TestCase):
@@ -390,8 +390,8 @@ class SourceRepair(unittest.TestCase):
                 "inspect_video": None,
                 "_similar_notes_for_prompt": "",
                 "reverse_image.search": None,
-                "cards_for_prompt": "",
-                "examples_for_prompt": "",
+                "cards_for_prompt": "Observed public reference",
+                "observed_patterns_for_prompt": "",
                 "unsupported_specifics": [],
                 "claim_opinion_score": 1.0,
                 "image_check.check": ([], []),

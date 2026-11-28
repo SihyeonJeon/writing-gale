@@ -11,6 +11,7 @@ Writes to data/benchmark/ (gitignored; note text written by other people is not 
   cards.json      note openings (first words) with their helpful rate over the last 365 days, each with
                   real helpful notes that use it: what works, measured, to imitate in form
   posts.json      for posts noted in the last 21 days: number of notes and whether any was rated helpful
+  observed_patterns.json literal feature counts, same-post comparisons and source-linked form examples
   meta.json       data date and counts
 
 Source: https://communitynotes.x.com/guide/en/under-the-hood/download-data
@@ -25,6 +26,9 @@ from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+from note_patterns import build_patterns
 
 import pandas as pd
 import requests
@@ -44,7 +48,6 @@ WORD_RE = re.compile(r"[^\W_]+(?:['\u2019][^\W_]+)?", re.UNICODE)
 MEDIA_RE = re.compile(r"video|vídeo|image|imagen|imagem|photo|foto|footage|clip|picture|\bai\b", re.I)
 
 
-NOISY_RE = re.compile("[!\U0001f000-\U0001faff\u2600-\u27bf]|&[a-z]+;")  # not shown as examples
 
 
 def opening(text: str, k: int):
@@ -68,8 +71,8 @@ def build_cards(year: pd.DataFrame) -> dict:
             authors.setdefault(f, set()).add(who)
             good[f] += h
             bad[f] += b
-            # keep the newest short helpful notes with a link as real examples of the opening
-            if h and 60 <= len(URL_RE.sub("", text)) <= 240 and URL_RE.search(text) and not NOISY_RE.search(text):
+            # Keep observed punctuation and emoji in actual helpful-note examples.
+            if h and len(URL_RE.sub("", text).strip()) <= 280 and URL_RE.search(text):
                 examples.setdefault(f, []).append((t, re.sub(r"\s+", " ", text).strip()))
         for f, c in n.items():
             if c >= MIN_FRAME_NOTES and len(authors[f]) >= MIN_FRAME_AUTHORS and not ABOUT_POSTER_RE.search(f):
@@ -87,9 +90,9 @@ def build_cards(year: pd.DataFrame) -> dict:
 MIN_DOMAIN_NOTES = 200
 
 
-def _download(kind: str) -> tuple[bytes, str]:
-    for back in range(0, 5):
-        d = datetime.now(timezone.utc) - timedelta(days=back)
+def _download(kind: str, exact_date: str | None = None) -> tuple[bytes, str]:
+    for back in range(1 if exact_date else 5):
+        d = datetime.strptime(exact_date, "%Y-%m-%d") if exact_date else datetime.now(timezone.utc) - timedelta(days=back)
         r = requests.get(BASE.format(d=d, kind=kind), timeout=600)
         if r.status_code == 200:
             return r.content, f"{d:%Y-%m-%d}"
@@ -114,19 +117,29 @@ def _host(url: str) -> str:
 
 def main() -> None:
     if len(sys.argv) == 3:
-        notes_src, status_src, date = sys.argv[1], sys.argv[2], "local"
+        notes_src, status_src = sys.argv[1], sys.argv[2]
+        date = Path(notes_src).parent.name
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+            date = "local"
     else:
         notes_src, date = _download("notes")
-        status_src, _ = _download("noteStatusHistory")
+        status_src, _ = _download("noteStatusHistory", exact_date=date)
     notes = _read(notes_src, ["noteId", "noteAuthorParticipantId", "createdAtMillis", "tweetId", "classification", "summary"])
     status = _read(status_src, ["noteId", "currentStatus"])
     notes = notes[notes.classification == "MISINFORMED_OR_POTENTIALLY_MISLEADING"]
     notes["t"] = pd.to_numeric(notes.createdAtMillis, errors="coerce")
-    newest = notes.t.max()
-    year = notes[notes.t > newest - FRAME_DAYS * 86400e3].merge(status, on="noteId")
+    newest = (
+        (datetime.strptime(date, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)).timestamp() * 1000
+        if date != "local" else notes.t.max()
+    )
+    year = notes[(notes.t > newest - FRAME_DAYS * 86400e3) & (notes.t < newest)].merge(status, on="noteId")
     year["summary"] = year.summary.fillna("")
     cards = build_cards(year)
     d = year[year.t > newest - DOMAIN_DAYS * 86400e3]
+
+    patterns = build_patterns(
+        (row._asdict() for row in d.sort_values("t", ascending=False).itertuples(index=False)), date, DOMAIN_DAYS,
+    )
 
     # domains
     n, good, bad = Counter(), Counter(), Counter()
@@ -137,7 +150,9 @@ def main() -> None:
             bad[h] += st == CRNH
     base = {"notes": len(d), "helpful": float((d.currentStatus == CRH).mean()), "not_helpful": float((d.currentStatus == CRNH).mean())}
     domains = {
-        h: {"notes": c, "helpful": round(good[h] / c, 4), "not_helpful": round(bad[h] / c, 4)}
+        h: {"notes": c, "helpful": round(good[h] / c, 4), "not_helpful": round(bad[h] / c, 4),
+            "helpful_notes": int(good[h]), "not_helpful_notes": int(bad[h]),
+            "needs_more_ratings": int(c - good[h] - bad[h])}
         for h, c in n.most_common() if c >= MIN_DOMAIN_NOTES
     }
 
@@ -148,7 +163,12 @@ def main() -> None:
     posts = recent.groupby("tweetId").currentStatus.agg(notes="size", helpful=lambda s: int((s == CRH).any()))
 
     OUT.mkdir(parents=True, exist_ok=True)
-    (OUT / "domains.json").write_text(json.dumps({"base": base, "domains": domains}))
+    patterns["domain_observations"] = {"base": base, "domains": domains}
+    pattern_path = OUT / "observed_patterns.json"
+    pattern_temp = pattern_path.with_suffix(".json.tmp")
+    pattern_temp.write_text(json.dumps(patterns, ensure_ascii=False))
+    pattern_temp.replace(pattern_path)
+    (OUT / "domains.json").write_text(json.dumps({"base": base, "domains": domains, "data_date": date, "days": DOMAIN_DAYS}))
     (OUT / "cards.json").write_text(json.dumps(cards, ensure_ascii=False))
     with (OUT / "exemplars.jsonl").open("w") as f:
         for nid, tid, text in zip(ex.noteId, ex.tweetId, ex.summary):

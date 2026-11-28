@@ -5,7 +5,7 @@ Deterministic pre-submit checks. Each one maps to a hard rule or an admission ev
                unverified; a rejection shows up as a submit error in the ledger.
 - has_url:     the API rejects notes without an http(s) URL
 - url_live:    UrlValidity evaluator wants >= 95% of notes with every link returning HTTP 200
-- style:       no hashtags / emojis / "Community Note:" prefixes (starter guidance, ClaimOpinion hygiene)
+- style:       existing labels, hashtags and user-specified stock phrases
 - opinion:     cheap lexical screen for hedging/opinion words that tend to drag ClaimOpinion down
 """
 
@@ -17,33 +17,26 @@ from urllib.parse import urlparse
 
 import requests
 
-from benchmark import distrusted_domain
 
 URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 TRAILING_PUNCT = ".,;:!?"
-EMOJI_RE = re.compile("[\U0001f300-\U0001faff\U00002600-\U000027bf\U0001f000-\U0001f2ff]")
 OPINION_RE = re.compile(
     r"\b(i think|i believe|in my opinion|clearly|obviously|probably|likely|seems|appears to|"
     r"we should|shameful|disgusting|ridiculous|lies|liar|propaganda|"
     r"uncorroborated|baseless|debunked|hoax|conspiracy theor(?:y|ies)|so-called)\b",
     re.IGNORECASE,
 )
-# Stock phrases and hype words that read as machine- or ad-written. In the public notes data (474k notes,
-# 180 days) notes with hype words were rated helpful 9.0% of the time vs 10.3% overall and Not Helpful
-# 3.4% vs 1.9%; notes opening with a filler word ("So", "Well", "OK") 0% of 56. The stock phrases are too
-# rare in notes to measure and are barred as plain hygiene.
+# Configured stock-phrase checks. Observed punctuation frequencies are supplied in the input.
 STOCK_RE = re.compile(
     r"\bdelve\b|\bin conclusion\b|\bin this article\b|\blet'?s (?:dive|explore)\b|\blook no further\b|"
     r"\bgame[- ]changer\b|\bmind[- ]blowing\b|\bunreal\b|\bobsessed\b|\bit'?s (?:amazing|incredible)\b",
     re.IGNORECASE,
 )
-OPENER_RE = re.compile(r"^\s*(?:ok|okay|alright|so|well|right|um|like|wait)\b[ ,]", re.IGNORECASE)
 PREFIX_RE = re.compile(r"^\s*(community note|note|context)\s*:", re.IGNORECASE)
 
 MAX_CHARS = 280
 
-# Domains whose citations do badly in public Community Notes data (low CRH, high CRNH) or that
-# aren't real sources: AI chatbots, search-result links, shorteners, dictionaries.
+# Source-type exclusions configured for the writer. Domain frequency tables are diagnostic input.
 BANNED_DOMAINS = {
     "grok.com", "chatgpt.com", "grokipedia.com", "gemini.google.com", "perplexity.ai",
     "share.google", "t.co", "tinyurl.com", "bit.ly",
@@ -56,12 +49,14 @@ def _host(url: str) -> str:
         h = (urlparse(url).hostname or "").lower()
     except ValueError:
         return ""
-    return h.removeprefix("www.").removeprefix("m.")
+    return h.removeprefix("www.").removeprefix("m.").removeprefix("mobile.")
 
 
 def banned_url(url: str) -> bool:
     h = _host(url)
     if h == "google.com" and "/search" in url:
+        return True
+    if h in {"x.com", "twitter.com"} and urlparse(url).path.strip("/").split("/")[0].lower() == "grok":
         return True
     return any(h == d or h.endswith("." + d) for d in BANNED_DOMAINS)
 UA = (
@@ -133,11 +128,8 @@ def normalize_note(text: str) -> str:
                 urls.append(url)
             body.append(part[len(url):])
             continue
-        part = re.sub(r"(\d)\s*[\u2013\u2014]\s*(\d)", r"\1-\2", part)  # number ranges
-        part = re.sub(r"\s*[\u2014\u2013]\s*", ", ", part)
         body.append(part)
     prose = re.sub(r"\s+", " ", "".join(body))
-    prose = re.sub(r"!+", ".", prose)  # notes with "!" are rated helpful 7.1% vs 10.3% overall
     prose = re.sub(r"\s+([.,;:!?])", r"\1", prose)
     prose = re.sub(r"([.!?])[.,;:]+", r"\1", prose)  # "sentence. ." left where a link was lifted out
     prose = PREFIX_RE.sub("", prose).strip(" ,;:")
@@ -182,30 +174,21 @@ def check_note(text: str, check_urls: bool = True, seen_urls: Optional[List[str]
         problems.append(f"note is {n} chars without URLs (max {MAX_CHARS})")
     if "#" in URL_RE.sub("", text):
         problems.append("note contains a hashtag")
-    if EMOJI_RE.search(text):
-        problems.append("note contains an emoji")
     if PREFIX_RE.search(text):
         problems.append('note starts with a label like "Community Note:"')
     body = URL_RE.sub("", text)
-    if re.search("[\u2014\u2013]", body):
-        problems.append("note uses an em/en dash; use a period or comma (dashes read as machine-written and score slightly lower)")
     if re.search(r"\?\s*(?:yes|no)\b", body, re.IGNORECASE):
         problems.append("note asks a question and answers it; state the fact directly")
     m = STOCK_RE.search(body)
     if m:
         problems.append(f'note uses a stock or hype phrase: "{m.group(0)}"; say it plainly')
-    if OPENER_RE.search(body):
-        problems.append("note opens with a filler word; start with the fact")
     m = OPINION_RE.search(body)
     if m:
         problems.append(f'note contains opinion/hedging wording: "{m.group(0)}"')
 
     for u in urls:
-        why = None if banned_url(u) else distrusted_domain(u)
-        if why:
-            problems.append(f"cites a domain whose notes raters reject unusually often ({why}); use another source: {u}")
         if banned_url(u):
-            problems.append(f"cites a source raters distrust or that is not a real source (AI chatbot, search link, shortener, dictionary): {u}")
+            problems.append(f"cites an excluded source type (AI chatbot, search link, shortener, dictionary): {u}")
 
     # An empty search result cannot establish a source.
     if seen_urls is not None:

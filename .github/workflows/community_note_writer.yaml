@@ -106,7 +106,7 @@ jobs:
         if: steps.switch.outputs.run == 'true'
         continue-on-error: true
         run: |
-          if [ -z "$(find data/benchmark/cards.json -mmin -1200 2>/dev/null)" ]; then
+          if [ -z "$(find data/benchmark/observed_patterns.json -mmin -1200 2>/dev/null)" ]; then
             uv run --with pandas tools/build_benchmark.py
           else
             echo "benchmark is fresh: $(cat data/benchmark/meta.json)"
